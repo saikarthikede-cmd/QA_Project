@@ -1,0 +1,18 @@
+# Use Python 3.11: py -3.11 -m pip install -r requirements.txt
+# Python 3.14 is not yet supported (pydantic-core has no wheel for it)
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+python-multipart==0.0.12
+pypdf==4.3.1
+sentence-transformers==2.7.0
+numpy==1.26.4
+groq>=0.11.0
+python-dotenv==1.0.1
+pydantic==2.10.3
+
+# Test PDF generation
+fpdf2==2.8.3
+
+# Development / testing
+pytest==8.3.4
+httpx==0.28.1

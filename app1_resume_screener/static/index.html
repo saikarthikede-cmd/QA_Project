@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>App 1 — Resume Screener</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:32px 16px}
+  h1{font-size:1.6rem;font-weight:700;color:#818cf8;margin-bottom:4px}
+  .subtitle{color:#94a3b8;font-size:.9rem;margin-bottom:32px}
+  .card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:24px;width:100%;max-width:860px;margin-bottom:20px}
+  .card h2{font-size:1rem;font-weight:600;color:#cbd5e1;margin-bottom:16px;display:flex;align-items:center;gap:8px}
+  .upload-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .upload-area{border:2px dashed #334155;border-radius:8px;padding:20px;text-align:center;cursor:pointer;transition:border-color .2s}
+  .upload-area:hover,.upload-area.drag{border-color:#818cf8}
+  .upload-area input{display:none}
+  .upload-area label{cursor:pointer;display:block}
+  .status{font-size:.82rem;color:#94a3b8;margin-top:8px;min-height:18px}
+  .status.ok{color:#4ade80}.status.err{color:#f87171}
+  .btn{background:#4f46e5;color:#fff;border:none;border-radius:8px;padding:11px 28px;font-size:.95rem;cursor:pointer;font-weight:600;transition:background .2s}
+  .btn:hover:not(:disabled){background:#4338ca}
+  .btn:disabled{background:#334155;color:#64748b;cursor:not-allowed}
+  .btn-sm{background:#334155;color:#94a3b8;border:none;border-radius:20px;padding:4px 12px;font-size:.75rem;cursor:pointer}
+  .btn-sm:hover{background:#1e293b;color:#f87171}
+  .dl-btn{background:#0f172a;color:#818cf8;border:1px solid #818cf8;border-radius:8px;padding:7px 16px;font-size:.82rem;cursor:pointer;margin-top:12px;display:none}
+  .dl-btn:hover{background:#818cf8;color:#0f172a}
+  .loader{display:none;text-align:center;color:#94a3b8;font-size:.85rem;margin-top:12px}
+  .loader.on{display:block}
+  .badge{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:#4f46e5;font-size:.7rem;font-weight:700}
+  .resume-pills{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+  .resume-pill{background:#0f172a;border:1px solid #334155;border-radius:20px;padding:5px 12px;font-size:.78rem;display:flex;align-items:center;gap:8px}
+  .results-section{display:none}
+  .results-section.active{display:block}
+  .candidate-card{background:#0f172a;border:1px solid #334155;border-radius:10px;padding:20px;margin-bottom:14px;display:grid;grid-template-columns:100px 1fr;gap:20px;align-items:start}
+  .score-ring{width:90px;height:90px;border-radius:50%;display:flex;align-items:center;justify-content:center;position:relative;flex-shrink:0}
+  .score-ring::before{content:'';position:absolute;width:72px;height:72px;border-radius:50%;background:#0f172a}
+  .score-inner{position:relative;z-index:1;text-align:center}
+  .score-num{font-size:1.4rem;font-weight:800;line-height:1}
+  .score-label{font-size:.6rem;color:#94a3b8;margin-top:2px}
+  .semantic-bar-wrap{margin-top:10px;width:90px}
+  .semantic-bar-label{font-size:.65rem;color:#64748b;margin-bottom:3px;text-align:center}
+  .semantic-bar-track{background:#1e293b;border-radius:6px;height:6px;overflow:hidden}
+  .semantic-bar-fill{height:100%;border-radius:6px}
+  .semantic-bar-val{font-size:.7rem;color:#94a3b8;text-align:center;margin-top:3px}
+  .score-mismatch{font-size:.68rem;color:#fbbf24;margin-top:6px;text-align:center;background:#1e293b;border-radius:6px;padding:3px 4px}
+  .rec-badge{display:inline-block;padding:4px 12px;border-radius:20px;font-size:.78rem;font-weight:700;margin-bottom:10px}
+  .rec-strong{background:#d1fae5;color:#065f46}
+  .rec-possible{background:#fef3c7;color:#92400e}
+  .rec-not{background:#fee2e2;color:#991b1b}
+  .candidate-name{font-size:.95rem;font-weight:700;color:#e2e8f0;margin-bottom:6px}
+  .candidate-summary{font-size:.82rem;color:#94a3b8;line-height:1.5;margin-bottom:10px}
+  .skill-section{margin-top:8px}
+  .skill-section h4{font-size:.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}
+  .pills{display:flex;flex-wrap:wrap;gap:5px}
+  .pill{padding:3px 10px;border-radius:12px;font-size:.74rem;font-weight:500}
+  .pill-match{background:#d1fae5;color:#065f46}
+  .pill-miss{background:#fee2e2;color:#991b1b}
+  .pill-flag{background:#fef3c7;color:#92400e}
+  .rank-badge{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:#334155;font-size:.7rem;font-weight:700;margin-right:6px;flex-shrink:0}
+  .chat-section{display:none}
+  .chat-section.active{display:block}
+  .chat-log{display:flex;flex-direction:column;gap:10px;margin-bottom:14px;max-height:380px;overflow-y:auto;padding-right:4px}
+  .chat-msg{padding:10px 14px;border-radius:10px;font-size:.85rem;line-height:1.55;max-width:92%}
+  .chat-msg.user{background:#312e81;color:#e0e7ff;align-self:flex-end;border-bottom-right-radius:3px}
+  .chat-msg.bot{background:#1e293b;color:#e2e8f0;align-self:flex-start;border-bottom-left-radius:3px;border:1px solid #334155}
+  .chat-pages{font-size:.72rem;color:#818cf8;margin-top:5px}
+  .chat-input-row{display:flex;gap:8px}
+  .chat-input{flex:1;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:10px 14px;color:#e2e8f0;font-size:.88rem;outline:none}
+  .chat-input:focus{border-color:#818cf8}
+  .chat-send{background:#4f46e5;color:#fff;border:none;border-radius:8px;padding:10px 20px;font-weight:600;cursor:pointer;font-size:.88rem;white-space:nowrap}
+  .chat-send:hover:not(:disabled){background:#4338ca}
+  .chat-send:disabled{background:#334155;color:#64748b;cursor:not-allowed}
+  .chat-hint{font-size:.75rem;color:#475569;margin-bottom:10px}
+  .chip-row{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:14px}
+  .chip{background:#0f172a;border:1px solid #334155;border-radius:20px;padding:5px 13px;font-size:.75rem;color:#94a3b8;cursor:pointer;transition:all .15s}
+  .chip:hover{border-color:#818cf8;color:#818cf8}
+</style>
+</head>
+<body>
+<h1>AI Resume Screener</h1>
+<p class="subtitle">Upload a Job Description + candidate resumes → AI ranks and scores each candidate.</p>
+
+<div class="card">
+  <h2><span class="badge">1</span> Upload Job Description PDF</h2>
+  <div class="upload-area" id="jdZone">
+    <label for="jdInput">
+      <div style="font-size:2rem">📋</div>
+      <div style="margin-top:6px;font-weight:600">Drop JD here or click to browse</div>
+      <div style="font-size:.78rem;color:#64748b;margin-top:4px">One PDF — the job description to screen against</div>
+      <input type="file" id="jdInput" accept=".pdf"/>
+    </label>
+  </div>
+  <div class="status" id="jdStatus"></div>
+</div>
+
+<div class="card" id="resumeCard" style="display:none">
+  <h2><span class="badge">2</span> Upload Candidate Resumes</h2>
+  <div class="upload-area" id="resumeZone">
+    <label for="resumeInput">
+      <div style="font-size:2rem">👤</div>
+      <div style="margin-top:6px;font-weight:600">Drop resume PDFs here or click to browse</div>
+      <div style="font-size:.78rem;color:#64748b;margin-top:4px">Upload one or more — each scored separately</div>
+      <input type="file" id="resumeInput" accept=".pdf" multiple/>
+    </label>
+  </div>
+  <div class="status" id="resumeStatus"></div>
+  <div class="resume-pills" id="resumePills"></div>
+  <div style="margin-top:16px">
+    <button class="btn" id="screenBtn" onclick="screen()" disabled>▶ Screen All Candidates</button>
+  </div>
+  <div class="loader" id="loader">⏳ AI is evaluating candidates…</div>
+</div>
+
+<div class="card results-section" id="resultsSection">
+  <h2><span class="badge">3</span> Screening Results</h2>
+  <div id="resultsContainer"></div>
+  <button class="dl-btn" id="dlBtn" onclick="downloadReport()">⬇ Download Report (PDF)</button>
+</div>
+
+<div class="card chat-section" id="chatSection">
+  <h2><span class="badge">4</span> Ask Questions About the Candidates</h2>
+  <p class="chat-hint">Click a scenario below or type your own question.</p>
+  <div class="chip-row">
+    <span class="chip" onclick="fillChat(this)">Why did the top candidate rank #1?</span>
+    <span class="chip" onclick="fillChat(this)">Which candidate has the weakest technical skills?</span>
+    <span class="chip" onclick="fillChat(this)">Compare the top two candidates side by side</span>
+    <span class="chip" onclick="fillChat(this)">Is there any candidate with a red flag?</span>
+    <span class="chip" onclick="fillChat(this)">Who would need the most onboarding to meet the JD?</span>
+    <span class="chip" onclick="fillChat(this)">Would you recommend hiring any of these candidates?</span>
+    <span class="chip" onclick="fillChat(this)">Which candidate is the biggest risk hire?</span>
+    <span class="chip" onclick="fillChat(this)">What specific evidence supports the #1 ranking?</span>
+  </div>
+  <div class="chat-log" id="chatLog"></div>
+  <div class="chat-input-row">
+    <input class="chat-input" id="chatInput" type="text" placeholder="Ask anything about the candidates or JD…" onkeydown="if(event.key==='Enter')sendChat()"/>
+    <button class="chat-send" id="chatSend" onclick="sendChat()">Send</button>
+  </div>
+</div>
+
+<script>
+const jdInput=document.getElementById('jdInput');
+const resumeInput=document.getElementById('resumeInput');
+const jdStatus=document.getElementById('jdStatus');
+const resumeStatus=document.getElementById('resumeStatus');
+const resumeCard=document.getElementById('resumeCard');
+const resumePills=document.getElementById('resumePills');
+const screenBtn=document.getElementById('screenBtn');
+const loader=document.getElementById('loader');
+const resultsSection=document.getElementById('resultsSection');
+const resultsContainer=document.getElementById('resultsContainer');
+const dlBtn=document.getElementById('dlBtn');
+
+let _resumes=[];
+let _lastResults=null;
+let _jdName='';
+
+function setupDrop(zone,input,handler){
+  ['dragenter','dragover'].forEach(e=>zone.addEventListener(e,ev=>{ev.preventDefault();zone.classList.add('drag')}));
+  ['dragleave','drop'].forEach(e=>zone.addEventListener(e,ev=>{ev.preventDefault();zone.classList.remove('drag')}));
+  zone.addEventListener('drop',ev=>[...ev.dataTransfer.files].forEach(handler));
+  input.addEventListener('change',()=>[...input.files].forEach(handler));
+}
+
+setupDrop(document.getElementById('jdZone'),jdInput,uploadJD);
+setupDrop(document.getElementById('resumeZone'),resumeInput,uploadResume);
+
+async function uploadJD(file){
+  if(file.size>50*1024*1024){jdStatus.className='status err';jdStatus.textContent='✗ File too large (max 50 MB).';return;}
+  jdStatus.className='status';jdStatus.textContent='Uploading…';
+  const fd=new FormData();fd.append('file',file);
+  try{
+    const r=await fetch('/upload-jd',{method:'POST',body:fd});
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.detail||'Upload failed');
+    jdStatus.className='status ok';
+    jdStatus.textContent=`✓ JD loaded: "${d.filename}"`;
+    _jdName=d.filename;
+    _resumes=[];resumePills.innerHTML='';screenBtn.disabled=true;
+    resumeCard.style.display='block';
+  }catch(e){jdStatus.className='status err';jdStatus.textContent='✗ '+e.message;}
+}
+
+async function uploadResume(file){
+  if(file.size>50*1024*1024){resumeStatus.className='status err';resumeStatus.textContent='✗ File too large (max 50 MB).';return;}
+  resumeStatus.className='status';resumeStatus.textContent=`Uploading ${file.name}…`;
+  const fd=new FormData();fd.append('file',file);
+  try{
+    const r=await fetch('/upload-resume',{method:'POST',body:fd});
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.detail||'Upload failed');
+    _resumes.push(file.name);
+    refreshPills();
+    resumeStatus.className='status ok';resumeStatus.textContent=`✓ ${file.name} added. Total: ${d.total_resumes}`;
+    screenBtn.disabled=false;
+  }catch(e){resumeStatus.className='status err';resumeStatus.textContent='✗ '+e.message;}
+}
+
+async function removeResume(name){
+  const r=await fetch('/resumes/'+encodeURIComponent(name),{method:'DELETE'});
+  if(r.ok){_resumes=_resumes.filter(n=>n!==name);refreshPills();if(!_resumes.length)screenBtn.disabled=true;}
+}
+
+function refreshPills(){
+  resumePills.innerHTML=_resumes.map(n=>`
+    <div class="resume-pill">👤 ${n}
+      <button class="btn-sm" onclick="removeResume('${n}')">✕</button>
+    </div>`).join('');
+}
+
+async function screen(){
+  screenBtn.disabled=true;
+  loader.className='loader on';
+  resultsSection.classList.remove('active');
+  dlBtn.style.display='none';
+  try{
+    const r=await fetch('/screen',{method:'POST'});
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.detail||'Error');
+    _lastResults=d;
+    renderResults(d.results);
+    resultsSection.classList.add('active');
+    dlBtn.style.display='inline-block';
+    chatSection.classList.add('active');
+    chatLog.innerHTML='';
+    appendChatMsg('bot','Screening complete! I can answer questions about all '+d.results.length+' candidate(s) and the JD. What would you like to know?',[]);
+  }catch(e){
+    resultsContainer.innerHTML=`<div style="color:#f87171">Error: ${e.message}</div>`;
+    resultsSection.classList.add('active');
+  }finally{loader.className='loader';screenBtn.disabled=false;}
+}
+
+function scoreColor(s){return s>=80?'#22c55e':s>=50?'#f59e0b':'#f87171';}
+function recClass(r){return r==='Strong Match'?'rec-strong':r==='Possible Match'?'rec-possible':'rec-not';}
+function conicGrad(s){return `conic-gradient(${scoreColor(s)} ${s}%, #1e293b 0)`;}
+
+function renderResults(results){
+  resultsContainer.innerHTML=results.map((c,i)=>{
+    const matched=(c.matched_skills||[]).map(s=>`<span class="pill pill-match">${esc(s)}</span>`).join('');
+    const missing=(c.missing_skills||[]).map(s=>`<span class="pill pill-miss">${esc(s)}</span>`).join('');
+    const flags=(c.red_flags||[]).map(s=>`<span class="pill pill-flag">⚑ ${esc(s)}</span>`).join('');
+    return `
+    <div class="candidate-card">
+      <div>
+        <div class="score-ring" style="background:${conicGrad(c.score||0)}">
+          <div class="score-inner">
+            <div class="score-num" style="color:${scoreColor(c.score||0)}">${c.score||0}</div>
+            <div class="score-label">AI SCORE</div>
+          </div>
+        </div>
+        <div class="semantic-bar-wrap">
+          <div class="semantic-bar-label">Semantic Match</div>
+          <div class="semantic-bar-track"><div class="semantic-bar-fill" style="width:${c.semantic_score||0}%;background:${scoreColor(c.semantic_score||0)}"></div></div>
+          <div class="semantic-bar-val">${c.semantic_score||0}%</div>
+        </div>
+        ${Math.abs((c.score||0)-(c.semantic_score||0))>=30?'<div class="score-mismatch">⚠ AI vs semantic disagree</div>':''}
+      </div>
+      <div>
+        <div class="candidate-name"><span class="rank-badge">#${i+1}</span>${esc(c.candidate)}</div>
+        <span class="rec-badge ${recClass(c.recommendation)}">${esc(c.recommendation||'Unknown')}</span>
+        <div class="candidate-summary">${esc(c.summary||'')}</div>
+        ${matched?`<div class="skill-section"><h4>Matched Skills</h4><div class="pills">${matched}</div></div>`:''}
+        ${missing?`<div class="skill-section" style="margin-top:8px"><h4>Missing Skills</h4><div class="pills">${missing}</div></div>`:''}
+        ${flags?`<div class="skill-section" style="margin-top:8px"><h4>Red Flags</h4><div class="pills">${flags}</div></div>`:''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function fillChat(el){chatInput.value=el.textContent.trim();chatInput.focus();}
+
+const chatSection=document.getElementById('chatSection');
+const chatLog=document.getElementById('chatLog');
+const chatInput=document.getElementById('chatInput');
+const chatSend=document.getElementById('chatSend');
+
+function appendChatMsg(role,text,pages){
+  const div=document.createElement('div');
+  div.className='chat-msg '+role;
+  div.innerHTML=esc(text)+(pages&&pages.length?`<div class="chat-pages">📄 Pages: ${pages.join(', ')}</div>`:'');
+  chatLog.appendChild(div);
+  chatLog.scrollTop=chatLog.scrollHeight;
+}
+
+async function sendChat(){
+  const q=chatInput.value.trim();
+  if(!q)return;
+  chatInput.value='';
+  chatSend.disabled=true;
+  appendChatMsg('user',q);
+  const thinking=document.createElement('div');
+  thinking.className='chat-msg bot';thinking.textContent='⏳ Thinking…';
+  chatLog.appendChild(thinking);chatLog.scrollTop=chatLog.scrollHeight;
+  try{
+    const r=await fetch('/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q})});
+    const d=await r.json();
+    chatLog.removeChild(thinking);
+    if(!r.ok)throw new Error(d.detail||'Error');
+    appendChatMsg('bot',d.answer,d.pages);
+  }catch(e){
+    chatLog.removeChild(thinking);
+    appendChatMsg('bot','Error: '+e.message,[]);
+  }finally{chatSend.disabled=false;chatInput.focus();}
+}
+
+function downloadReport(){
+  if(!_lastResults) return;
+  const {jsPDF}=window.jspdf;
+  const doc=new jsPDF();
+  const W=170,ml=20;let y=20;
+  const nl=(n=5)=>{y+=n;};
+  const addLine=(text,size=11,style='normal',color=[30,30,30])=>{
+    doc.setFontSize(size);doc.setFont('helvetica',style);doc.setTextColor(...color);
+    const lines=doc.splitTextToSize(String(text||''),W);
+    if(y+lines.length*size*0.4>280){doc.addPage();y=20;}
+    doc.text(lines,ml,y);y+=lines.length*(size*0.45);
+  };
+  addLine('Resume Screening Report',16,'bold',[79,70,229]);nl(2);
+  addLine('Generated: '+new Date().toLocaleString(),9,'normal',[120,120,120]);
+  addLine('Job Description: '+_jdName,9,'normal',[120,120,120]);nl(4);
+  doc.setDrawColor(200,200,200);doc.line(ml,y,ml+W,y);nl(8);
+  _lastResults.results.forEach((c,i)=>{
+    addLine(`#${i+1} — ${c.candidate}`,12,'bold',[99,102,241]);nl(2);
+    addLine(`AI Score: ${c.score}/100  |  Semantic Match: ${c.semantic_score||0}%  |  ${c.recommendation}`,10,'bold',c.score>=80?[22,163,74]:c.score>=50?[217,119,6]:[220,38,38]);nl(3);
+    addLine(c.summary||'',10);nl(3);
+    if((c.matched_skills||[]).length){addLine('Matched: '+c.matched_skills.join(', '),9,'normal',[22,163,74]);nl(2);}
+    if((c.missing_skills||[]).length){addLine('Missing: '+c.missing_skills.join(', '),9,'normal',[220,38,38]);nl(2);}
+    if((c.red_flags||[]).length){addLine('Red Flags: '+c.red_flags.join(', '),9,'normal',[217,119,6]);nl(2);}
+    nl(4);doc.setDrawColor(230,230,230);doc.line(ml,y,ml+W,y);nl(8);
+  });
+  doc.save('resume_screening_'+new Date().toISOString().replace(/[:.]/g,'-')+'.pdf');
+}
+</script>
+
+<!-- ══ QA Run History (localStorage, per-browser) ══ -->
+<script>
+(function(){
+  var KEY='qa_hist_app1', MAX=20, TRACK=["/screen", "/ask"], ACCENT='#6366f1';
+  function load(){try{var v=JSON.parse(localStorage.getItem(KEY));return Array.isArray(v)?v:[]}catch(e){return[]}}
+  function save(l){try{localStorage.setItem(KEY,JSON.stringify(l.slice(0,MAX)))}catch(e){}}
+  function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+  function summarize(d){
+    if(!d||typeof d!=='object')return'';
+    if(d.decision)return'Decision: '+d.decision;
+    if(d.answer)return String(d.answer);
+    if(d.report)return'Report generated ('+Object.keys(d.report).length+' sections)';
+    if(d.faqs)return(d.faqs.length||0)+' FAQs generated';
+    if(d.results)return(d.results.length||0)+' candidate(s) screened';
+    if(d.summary)return String(d.summary);
+    if(d.changes)return(Array.isArray(d.changes)?d.changes.length+' change(s) found':String(d.changes));
+    return JSON.stringify(d).slice(0,140);
+  }
+  function inputOf(opts){
+    try{
+      if(!opts||!opts.body)return'';
+      if(typeof opts.body==='string'){
+        var j=JSON.parse(opts.body);
+        return j.ticket||j.question||j.count&&('count='+j.count)||JSON.stringify(j);
+      }
+      if(opts.body instanceof FormData)return'[file upload]';
+    }catch(e){}
+    return'';
+  }
+  var origFetch=window.fetch;
+  window.fetch=function(url,opts){
+    var p=origFetch.apply(this,arguments);
+    try{
+      var path=(typeof url==='string'?url:(url&&url.url)||'').split('?')[0];
+      var hit=TRACK.some(function(t){return path===t||path.endsWith(t)});
+      if(hit){
+        p.then(function(r){
+          if(!r.ok)return;
+          r.clone().json().then(function(data){
+            var l=load();
+            l.unshift({t:Date.now(),ep:path.replace(/^.*\//,'/'),inp:String(inputOf(opts)).slice(0,140),res:String(summarize(data)).slice(0,180)});
+            save(l);render();
+          }).catch(function(){});
+        }).catch(function(){});
+      }
+    }catch(e){}
+    return p;
+  };
+  function fmtTime(t){
+    var d=new Date(t);
+    return d.toLocaleDateString()+' '+d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+  }
+  var host=null;
+  function ensurePanel(){
+    if(host)return;
+    host=document.createElement('div');
+    host.innerHTML=
+      '<div id="qaHistCard" style="background:#1e293b;border:1px solid #334155;border-radius:12px;padding:24px;width:100%;max-width:800px;margin:0 auto 20px;font-family:inherit">'+
+      '<div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer" id="qaHistHead">'+
+      '<h2 style="font-size:1rem;font-weight:600;color:#cbd5e1;display:flex;align-items:center;gap:8px;margin:0">'+
+      '<span style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:'+ACCENT+'22;border:1px solid '+ACCENT+'55;font-size:.75rem">🕘</span>'+
+      'Recent Runs <span style="font-size:.7rem;color:#64748b;font-weight:400">(this browser only)</span></h2>'+
+      '<span style="display:flex;gap:10px;align-items:center">'+
+      '<button id="qaHistClear" style="background:none;border:1px solid #334155;color:#94a3b8;border-radius:6px;padding:4px 10px;font-size:.72rem;cursor:pointer">Clear</button>'+
+      '<span id="qaHistToggle" style="color:#64748b;font-size:.8rem">▾</span></span></div>'+
+      '<div id="qaHistBody" style="margin-top:14px"></div></div>';
+    document.body.appendChild(host.firstChild);
+    host=document.getElementById('qaHistCard');
+    document.getElementById('qaHistClear').addEventListener('click',function(ev){
+      ev.stopPropagation();
+      if(confirm('Clear run history for this app in this browser?')){try{localStorage.removeItem(KEY)}catch(e){}render();}
+    });
+    document.getElementById('qaHistHead').addEventListener('click',function(){
+      var b=document.getElementById('qaHistBody');
+      var open=b.style.display!=='none';
+      b.style.display=open?'none':'block';
+      document.getElementById('qaHistToggle').textContent=open?'▸':'▾';
+    });
+  }
+  function render(){
+    ensurePanel();
+    var l=load(),b=document.getElementById('qaHistBody');
+    if(!l.length){b.innerHTML='<div style="font-size:.8rem;color:#475569">No runs yet. Results of your test runs will appear here and survive page refresh and server restarts.</div>';return;}
+    b.innerHTML=l.map(function(e){
+      return '<div style="background:#0f172a;border:1px solid #1e293b;border-radius:8px;padding:10px 14px;margin-bottom:8px">'+
+        '<div style="display:flex;justify-content:space-between;gap:10px;margin-bottom:4px">'+
+        '<span style="font-size:.72rem;font-weight:700;color:'+ACCENT+'">'+esc(e.ep)+'</span>'+
+        '<span style="font-size:.68rem;color:#475569">'+esc(fmtTime(e.t))+'</span></div>'+
+        (e.inp?'<div style="font-size:.76rem;color:#94a3b8;margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">IN: '+esc(e.inp)+'</div>':'')+
+        (e.res?'<div style="font-size:.76rem;color:#cbd5e1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">OUT: '+esc(e.res)+'</div>':'')+
+        '</div>';
+    }).join('');
+  }
+  if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',render);}else{render();}
+})();
+</script>
+
+</body>
+</html>

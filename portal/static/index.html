@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>AI Tools Portal</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0a0f1e;--sidebar:#0d1426;--card:#111827;--border:#1e2d45;
+  --text:#e2e8f0;--muted:#64748b;--accent:#6366f1;
+}
+body{font-family:'Segoe UI',sans-serif;background:var(--bg);color:var(--text);height:100vh;display:flex;overflow:hidden}
+
+/* ── SIDEBAR ── */
+#sidebar{
+  width:240px;min-width:240px;background:var(--sidebar);border-right:1px solid var(--border);
+  display:flex;flex-direction:column;z-index:10;transition:width .2s;overflow:hidden
+}
+#sidebar.collapsed{width:60px;min-width:60px}
+.sidebar-header{
+  padding:20px 16px 14px;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between;
+}
+.logo-text{font-size:1.05rem;font-weight:700;color:#fff;white-space:nowrap;overflow:hidden}
+.logo-sub{font-size:.72rem;color:var(--muted);white-space:nowrap}
+#collapseBtn{
+  background:none;border:1px solid var(--border);color:var(--muted);
+  border-radius:6px;width:28px;height:28px;cursor:pointer;font-size:.9rem;
+  flex-shrink:0;display:flex;align-items:center;justify-content:center
+}
+#collapseBtn:hover{color:var(--text);border-color:#334155}
+
+.nav-section{padding:10px 8px 4px;font-size:.65rem;font-weight:700;letter-spacing:.1em;color:var(--muted);text-transform:uppercase;white-space:nowrap;overflow:hidden}
+.nav-item{
+  display:flex;align-items:center;gap:10px;padding:10px 12px;
+  border-radius:8px;cursor:pointer;transition:background .15s;
+  margin:2px 6px;border:1px solid transparent;white-space:nowrap;overflow:hidden;
+}
+.nav-item:hover{background:#1e293b}
+.nav-item.active{background:#1e3a5f;border-color:#2563eb22}
+.nav-icon{font-size:1.2rem;flex-shrink:0;width:24px;text-align:center}
+.nav-label{font-size:.85rem;font-weight:500;overflow:hidden;text-overflow:ellipsis}
+.nav-dot{
+  width:7px;height:7px;border-radius:50%;background:#334155;
+  flex-shrink:0;margin-left:auto;transition:background .3s
+}
+.nav-dot.up{background:#22c55e}
+.nav-dot.down{background:#ef4444}
+.nav-dot.checking{background:#f59e0b;animation:pulse 1s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+
+.sidebar-footer{margin-top:auto;padding:12px 8px;border-top:1px solid var(--border)}
+.footer-btn{
+  display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;
+  cursor:pointer;color:var(--muted);font-size:.82rem;transition:background .15s;white-space:nowrap;overflow:hidden
+}
+.footer-btn:hover{background:#1e293b;color:var(--text)}
+
+/* ── MAIN ── */
+#main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+
+/* ── TOPBAR ── */
+#topbar{
+  height:52px;background:var(--sidebar);border-bottom:1px solid var(--border);
+  display:flex;align-items:center;padding:0 20px;gap:12px;flex-shrink:0
+}
+#breadcrumb{font-size:.85rem;color:var(--muted)}
+#breadcrumb span{color:var(--text);font-weight:600}
+.open-tab-btn{
+  margin-left:auto;background:none;border:1px solid var(--border);color:var(--muted);
+  border-radius:6px;padding:5px 12px;font-size:.78rem;cursor:pointer;transition:all .15s
+}
+.open-tab-btn:hover{border-color:var(--accent);color:var(--accent)}
+.open-tab-btn.hidden{display:none}
+
+/* ── CONTENT ── */
+#content{flex:1;overflow:hidden;position:relative}
+
+/* ── DASHBOARD ── */
+#dashboard{height:100%;overflow-y:auto;padding:32px}
+.dash-hero{text-align:center;margin-bottom:36px}
+.dash-hero h1{font-size:2rem;font-weight:800;background:linear-gradient(135deg,#6366f1,#a855f7,#0ea5e9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:8px}
+.dash-hero p{color:var(--muted);font-size:.95rem;max-width:560px;margin:0 auto}
+
+.status-bar{
+  background:var(--card);border:1px solid var(--border);border-radius:10px;
+  padding:12px 20px;margin-bottom:28px;display:flex;align-items:center;gap:16px;flex-wrap:wrap
+}
+.status-bar-label{font-size:.8rem;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.06em}
+.status-pill{display:flex;align-items:center;gap:6px;font-size:.78rem;color:var(--muted)}
+.status-pill .dot{width:7px;height:7px;border-radius:50%}
+
+.app-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:18px}
+.app-card{
+  background:var(--card);border:1px solid var(--border);border-radius:12px;
+  padding:22px;cursor:pointer;transition:transform .15s,border-color .15s,box-shadow .15s;
+  position:relative;overflow:hidden
+}
+.app-card::before{
+  content:'';position:absolute;top:0;left:0;right:0;height:3px;
+  background:var(--card-color,#6366f1);transition:height .15s
+}
+.app-card:hover{transform:translateY(-3px);box-shadow:0 8px 30px #0006;border-color:#334155}
+.app-card:hover::before{height:4px}
+.card-top{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:12px}
+.card-icon{font-size:2rem;line-height:1}
+.card-status-dot{width:8px;height:8px;border-radius:50%;background:#334155;margin-top:4px;transition:background .3s}
+.card-status-dot.up{background:#22c55e}
+.card-status-dot.down{background:#ef4444}
+.card-status-dot.checking{background:#f59e0b;animation:pulse 1s infinite}
+.card-name{font-size:1rem;font-weight:700;color:#fff;margin-bottom:6px}
+.card-port{font-size:.72rem;color:var(--muted);font-weight:500;margin-bottom:10px}
+.card-desc{font-size:.82rem;color:#94a3b8;line-height:1.6}
+.card-btn{
+  margin-top:16px;display:inline-flex;align-items:center;gap:6px;
+  background:var(--card-color,#6366f1)22;color:var(--card-color,#6366f1);
+  border:1px solid var(--card-color,#6366f1)44;border-radius:6px;
+  padding:6px 14px;font-size:.78rem;font-weight:600;transition:background .15s
+}
+.app-card:hover .card-btn{background:var(--card-color,#6366f1)44}
+
+/* ── APP FRAME ── */
+#frame-wrapper{display:none;height:100%;flex-direction:column}
+#frame-wrapper.visible{display:flex}
+#app-frame{flex:1;border:none;width:100%;background:#fff}
+
+/* ── SCROLLBAR ── */
+#dashboard::-webkit-scrollbar{width:6px}
+#dashboard::-webkit-scrollbar-track{background:transparent}
+#dashboard::-webkit-scrollbar-thumb{background:#1e293b;border-radius:3px}
+</style>
+</head>
+<body>
+
+<!-- SIDEBAR -->
+<nav id="sidebar">
+  <div class="sidebar-header">
+    <div style="overflow:hidden">
+      <div class="logo-text">🤖 AI Portal</div>
+      <div class="logo-sub">6 tools · unified</div>
+    </div>
+    <button id="collapseBtn" onclick="toggleSidebar()" title="Collapse">‹</button>
+  </div>
+
+  <div class="nav-section sidebar-text">Navigation</div>
+
+  <div class="nav-item active" id="nav-home" onclick="showDashboard()">
+    <span class="nav-icon">🏠</span>
+    <span class="nav-label sidebar-text">Dashboard</span>
+  </div>
+
+  <div class="nav-section sidebar-text" style="margin-top:6px">Apps</div>
+
+  <div class="nav-item" id="nav-app1" onclick="openApp('app1',8001,'Resume Screener','📄')">
+    <span class="nav-icon">📄</span>
+    <span class="nav-label sidebar-text">Resume Screener</span>
+    <span class="nav-dot checking" id="dot-app1"></span>
+  </div>
+  <div class="nav-item" id="nav-app2" onclick="openApp('app2',8002,'Doc Diff Analyzer','🔍')">
+    <span class="nav-icon">🔍</span>
+    <span class="nav-label sidebar-text">Doc Diff Analyzer</span>
+    <span class="nav-dot checking" id="dot-app2"></span>
+  </div>
+  <div class="nav-item" id="nav-app3" onclick="openApp('app3',8003,'FAQ Generator','💬')">
+    <span class="nav-icon">💬</span>
+    <span class="nav-label sidebar-text">FAQ Generator</span>
+    <span class="nav-dot checking" id="dot-app3"></span>
+  </div>
+  <div class="nav-item" id="nav-app4" onclick="openApp('app4',8004,'Report Agent','📊')">
+    <span class="nav-icon">📊</span>
+    <span class="nav-label sidebar-text">Report Agent</span>
+    <span class="nav-dot checking" id="dot-app4"></span>
+  </div>
+  <div class="nav-item" id="nav-app5" onclick="openApp('app5',8005,'Policy Triage Agent','🛡️')">
+    <span class="nav-icon">🛡️</span>
+    <span class="nav-label sidebar-text">Policy Triage Agent</span>
+    <span class="nav-dot checking" id="dot-app5"></span>
+  </div>
+  <div class="nav-item" id="nav-app6" onclick="openApp('app6',8006,'Data Analyst Agent','📈')">
+    <span class="nav-icon">📈</span>
+    <span class="nav-label sidebar-text">Data Analyst Agent</span>
+    <span class="nav-dot checking" id="dot-app6"></span>
+  </div>
+
+  <div class="sidebar-footer">
+    <div class="footer-btn" onclick="checkStatus()">
+      <span style="font-size:1rem">🔄</span>
+      <span class="sidebar-text">Refresh Status</span>
+    </div>
+  </div>
+</nav>
+
+<!-- MAIN -->
+<div id="main">
+  <!-- TOPBAR -->
+  <div id="topbar">
+    <div id="breadcrumb">AI Portal › <span id="crumb-label">Dashboard</span></div>
+    <button class="open-tab-btn hidden" id="openTabBtn" onclick="openCurrentInTab()">↗ Open in new tab</button>
+  </div>
+
+  <!-- CONTENT -->
+  <div id="content">
+
+    <!-- DASHBOARD -->
+    <div id="dashboard">
+      <div class="dash-hero">
+        <h1>AI Tools Portal</h1>
+        <p>Six AI-powered tools for your QA team — all in one place. Select an app from the sidebar or click a card below.</p>
+      </div>
+
+      <div class="status-bar" id="statusBar">
+        <span class="status-bar-label">Services</span>
+        <span class="status-pill"><span class="dot" style="background:#f59e0b"></span> Checking…</span>
+      </div>
+
+      <div class="app-grid">
+        <div class="app-card" style="--card-color:#6366f1" onclick="openApp('app1',8001,'Resume Screener','📄')">
+          <div class="card-top"><span class="card-icon">📄</span><span class="card-status-dot checking" id="cdot-app1"></span></div>
+          <div class="card-name">Resume Screener</div>
+          <div class="card-port">localhost:8001</div>
+          <div class="card-desc">Upload a job description and candidate resumes. AI ranks candidates by semantic fit and lets you ask follow-up questions via chat.</div>
+          <div class="card-btn">Open app →</div>
+        </div>
+        <div class="app-card" style="--card-color:#0ea5e9" onclick="openApp('app2',8002,'Doc Diff Analyzer','🔍')">
+          <div class="card-top"><span class="card-icon">🔍</span><span class="card-status-dot checking" id="cdot-app2"></span></div>
+          <div class="card-name">Doc Diff Analyzer</div>
+          <div class="card-port">localhost:8002</div>
+          <div class="card-desc">Upload two PDF versions of a document. AI detects additions, deletions, and rewrites with page-level evidence and metadata comparison.</div>
+          <div class="card-btn">Open app →</div>
+        </div>
+        <div class="app-card" style="--card-color:#10b981" onclick="openApp('app3',8003,'FAQ Generator','💬')">
+          <div class="card-top"><span class="card-icon">💬</span><span class="card-status-dot checking" id="cdot-app3"></span></div>
+          <div class="card-name">FAQ Generator</div>
+          <div class="card-port">localhost:8003</div>
+          <div class="card-desc">Upload any PDF manual or policy. AI auto-generates FAQ pairs and lets you ask custom questions via an interactive chat interface.</div>
+          <div class="card-btn">Open app →</div>
+        </div>
+        <div class="app-card" style="--card-color:#f59e0b" onclick="openApp('app4',8004,'Report Agent','📊')">
+          <div class="card-top"><span class="card-icon">📊</span><span class="card-status-dot checking" id="cdot-app4"></span></div>
+          <div class="card-name">Report Agent</div>
+          <div class="card-port">localhost:8004</div>
+          <div class="card-desc">Upload a business report PDF. Agentic AI uses tool calls to write a full 5-section structured report with page citations and chat Q&A.</div>
+          <div class="card-btn">Open app →</div>
+        </div>
+        <div class="app-card" style="--card-color:#f43f5e" onclick="openApp('app5',8005,'Policy Triage Agent','🛡️')">
+          <div class="card-top"><span class="card-icon">🛡️</span><span class="card-status-dot checking" id="cdot-app5"></span></div>
+          <div class="card-name">Policy Triage Agent</div>
+          <div class="card-port">localhost:8005</div>
+          <div class="card-desc">Upload a support policy PDF and paste a customer ticket. Agent decides escalate vs auto-resolve using 4 specialized tools.</div>
+          <div class="card-btn">Open app →</div>
+        </div>
+        <div class="app-card" style="--card-color:#a855f7" onclick="openApp('app6',8006,'Data Analyst Agent','📈')">
+          <div class="card-top"><span class="card-icon">📈</span><span class="card-status-dot checking" id="cdot-app6"></span></div>
+          <div class="card-name">Data Analyst Agent</div>
+          <div class="card-port">localhost:8006</div>
+          <div class="card-desc">Upload a data PDF. Multi-turn agent runs Python computations, recalls previous answers across turns, and explains results in plain language.</div>
+          <div class="card-btn">Open app →</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- APP IFRAME -->
+    <div id="frame-wrapper">
+      <iframe id="app-frame" src="about:blank" title="App"></iframe>
+    </div>
+
+  </div><!-- /content -->
+</div><!-- /main -->
+
+<script>
+let _collapsed = false;
+let _currentApp = null;
+let _currentPort = null;
+
+function toggleSidebar(){
+  _collapsed = !_collapsed;
+  document.getElementById('sidebar').classList.toggle('collapsed', _collapsed);
+  document.getElementById('collapseBtn').textContent = _collapsed ? '›' : '‹';
+}
+
+function showDashboard(){
+  _currentApp = null;
+  document.getElementById('dashboard').style.display='block';
+  document.getElementById('frame-wrapper').classList.remove('visible');
+  document.getElementById('app-frame').src='about:blank';
+  document.getElementById('crumb-label').textContent='Dashboard';
+  document.getElementById('openTabBtn').classList.add('hidden');
+  setActiveNav('nav-home');
+}
+
+function openApp(id, port, name, icon){
+  _currentApp = id;
+  _currentPort = port;
+  document.getElementById('dashboard').style.display='none';
+  document.getElementById('frame-wrapper').classList.add('visible');
+  document.getElementById('app-frame').src=`http://localhost:${port}/`;
+  document.getElementById('crumb-label').textContent=`${icon} ${name}`;
+  document.getElementById('openTabBtn').classList.remove('hidden');
+  setActiveNav('nav-'+id);
+}
+
+function openCurrentInTab(){
+  if(_currentPort) window.open(`http://localhost:${_currentPort}/`,'_blank');
+}
+
+function setActiveNav(activeId){
+  document.querySelectorAll('.nav-item').forEach(el=>{
+    el.classList.toggle('active', el.id===activeId);
+  });
+}
+
+async function checkStatus(){
+  // Reset all to checking
+  ['app1','app2','app3','app4','app5','app6'].forEach(id=>{
+    setDot(id,'checking');
+  });
+  document.getElementById('statusBar').innerHTML='<span class="status-bar-label">Services</span><span class="status-pill"><span class="dot" style="background:#f59e0b;border-radius:50%;width:7px;height:7px;display:inline-block"></span> Checking…</span>';
+
+  try{
+    const r = await fetch('/api/status');
+    const data = await r.json();
+    let upCount=0, downCount=0;
+    for(const [id, state] of Object.entries(data)){
+      setDot(id, state);
+      if(state==='up') upCount++; else downCount++;
+    }
+    renderStatusBar(upCount, downCount);
+  }catch(e){
+    document.getElementById('statusBar').innerHTML='<span class="status-bar-label">Services</span><span style="color:#f87171;font-size:.82rem">Could not reach portal API</span>';
+  }
+}
+
+function setDot(id, state){
+  const classes='nav-dot '+state;
+  const el=document.getElementById('dot-'+id);
+  if(el){el.className=classes}
+  const cel=document.getElementById('cdot-'+id);
+  if(cel){cel.className='card-status-dot '+state}
+}
+
+function renderStatusBar(up,down){
+  const pills=[`<span class="status-bar-label">Services</span>`];
+  pills.push(`<span class="status-pill"><span class="dot" style="background:#22c55e;border-radius:50%;width:7px;height:7px;display:inline-block"></span> ${up} online</span>`);
+  if(down>0) pills.push(`<span class="status-pill"><span class="dot" style="background:#ef4444;border-radius:50%;width:7px;height:7px;display:inline-block"></span> ${down} offline</span>`);
+  document.getElementById('statusBar').innerHTML=pills.join('');
+}
+
+// Auto-check on load
+checkStatus();
+// Re-check every 30 seconds
+setInterval(checkStatus, 30000);
+</script>
+</body>
+</html>

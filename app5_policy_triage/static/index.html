@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>App 5 — Policy Triage Agent</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:32px 16px}
+  h1{font-size:1.6rem;font-weight:700;color:#f472b6;margin-bottom:4px}
+  .subtitle{color:#94a3b8;font-size:.9rem;margin-bottom:32px}
+  .card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:24px;width:100%;max-width:800px;margin-bottom:20px}
+  .card h2{font-size:1rem;font-weight:600;color:#cbd5e1;margin-bottom:16px;display:flex;align-items:center;gap:8px}
+  .upload-area{border:2px dashed #334155;border-radius:8px;padding:24px;text-align:center;cursor:pointer;transition:border-color .2s}
+  .upload-area:hover{border-color:#f472b6}
+  .upload-area input{display:none}
+  .status{font-size:.85rem;color:#94a3b8;margin-top:10px;min-height:20px}
+  .status.ok{color:#4ade80} .status.err{color:#f87171}
+  .triage-section{display:none}
+  .triage-section.active{display:block}
+  textarea{width:100%;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#e2e8f0;padding:12px;font-size:.9rem;resize:vertical;min-height:120px}
+  textarea:focus{outline:none;border-color:#f472b6}
+  .btn{background:#be185d;color:#fff;border:none;border-radius:8px;padding:12px 28px;font-size:.95rem;cursor:pointer;font-weight:600;transition:background .2s;margin-top:10px}
+  .btn:hover:not(:disabled){background:#9d174d}
+  .btn:disabled{background:#334155;color:#64748b;cursor:not-allowed}
+  .dl-btn{background:#0f172a;color:#f472b6;border:1px solid #f472b6;border-radius:8px;padding:7px 16px;font-size:.82rem;cursor:pointer;margin-top:10px;display:none}
+  .dl-btn:hover{background:#f472b6;color:#0f172a}
+  .result{display:none;margin-top:20px}
+  .decision-banner{border-radius:10px;padding:16px 22px;font-size:1.1rem;font-weight:700;text-align:center;margin-bottom:16px}
+  .escalate{background:#fee2e2;color:#991b1b;border:2px solid #fca5a5}
+  .auto-resolve{background:#d1fae5;color:#065f46;border:2px solid #6ee7b7}
+  .result-card{background:#0f172a;border:1px solid #334155;border-radius:8px;padding:16px;margin-bottom:12px}
+  .result-card h3{font-size:.9rem;font-weight:700;color:#f472b6;margin-bottom:10px}
+  .result-card p{font-size:.88rem;line-height:1.7;white-space:pre-wrap}
+  .tool-step{font-size:.78rem;color:#64748b;background:#0f172a;border:1px solid #1e293b;border-radius:6px;padding:8px 12px;margin-bottom:6px}
+  .tool-step strong{color:#94a3b8}
+  .page-pills{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  .page-pill{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:2px 10px;font-size:.75rem;color:#f472b6}
+  .loader{display:none;text-align:center;color:#94a3b8;font-size:.85rem;margin-top:12px}
+  .loader.on{display:block}
+  .badge{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:#be185d;font-size:.7rem;font-weight:700}
+  .scenario-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px;margin-top:4px}
+  .scenario-card{background:#0f172a;border:1px solid #334155;border-radius:8px;padding:12px 14px;cursor:pointer;transition:border-color .15s}
+  .scenario-card:hover{border-color:#f472b6}
+  .scenario-outcome{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;display:flex;align-items:center;gap:5px}
+  .outcome-resolve{color:#4ade80}.outcome-escalate{color:#f87171}.outcome-depends{color:#fbbf24}
+  .scenario-name{font-size:.85rem;font-weight:600;color:#e2e8f0;margin-bottom:5px}
+  .scenario-preview{font-size:.74rem;color:#64748b;line-height:1.4;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+  .scenario-use{font-size:.7rem;color:#475569;margin-top:5px;font-style:italic}
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+<body>
+<h1>PDF Policy Triage Agent</h1>
+<p class="subtitle">Upload policy PDF → paste a support ticket → agent decides escalate or resolve, drafts a grounded reply.</p>
+
+<div class="card">
+  <h2><span class="badge">1</span> Upload policy PDF</h2>
+  <div class="upload-area" id="dropZone">
+    <label for="pdfInput">
+      <div style="font-size:2rem">📋</div>
+      <div style="margin-top:8px;font-weight:600">Drop policy PDF here or click to browse</div>
+      <input type="file" id="pdfInput" accept=".pdf"/>
+    </label>
+  </div>
+  <div class="status" id="uploadStatus"></div>
+</div>
+
+<div class="card triage-section" id="triageSection">
+  <h2><span class="badge">2</span> Paste support ticket</h2>
+  <div style="font-size:.8rem;color:#64748b;margin-bottom:10px">Click any scenario card to load it — or write your own ticket below.</div>
+  <div class="scenario-grid" style="margin-bottom:16px">
+    <div class="scenario-card" onclick="loadTicket(0)">
+      <div class="scenario-outcome outcome-resolve">✅ Expected: AUTO-RESOLVE</div>
+      <div class="scenario-name">Simple Refund Request</div>
+      <div class="scenario-preview">I'd like to cancel my subscription and receive a refund. I signed up 3 days ago and haven't used the service at all.</div>
+      <div class="scenario-use">Tests: policy retrieval + SLA lookup</div>
+    </div>
+    <div class="scenario-card" onclick="loadTicket(1)">
+      <div class="scenario-outcome outcome-escalate">🚨 Expected: ESCALATE (Legal)</div>
+      <div class="scenario-name">Legal Threat</div>
+      <div class="scenario-preview">I am consulting with my lawyer about filing a lawsuit against your company. You have failed to resolve this issue for 3 months and I will pursue legal action immediately.</div>
+      <div class="scenario-use">Tests: legal keyword → always escalate rule</div>
+    </div>
+    <div class="scenario-card" onclick="loadTicket(2)">
+      <div class="scenario-outcome outcome-escalate">🚨 Expected: ESCALATE (Security)</div>
+      <div class="scenario-name">Account Breach Claim</div>
+      <div class="scenario-preview">Someone hacked into my account last night and made $800 in unauthorized purchases. My personal data and payment details may have been compromised.</div>
+      <div class="scenario-use">Tests: security SLA + escalation logic</div>
+    </div>
+    <div class="scenario-card" onclick="loadTicket(3)">
+      <div class="scenario-outcome outcome-escalate">🚨 Expected: ESCALATE (Sentiment)</div>
+      <div class="scenario-name">Angry / Frustrated Customer</div>
+      <div class="scenario-preview">This is absolutely OUTRAGEOUS. I have been waiting 3 weeks with zero response. Your support is the WORST I have ever experienced. I am furious and this is completely unacceptable.</div>
+      <div class="scenario-use">Tests: classify_sentiment tool triggering escalation</div>
+    </div>
+    <div class="scenario-card" onclick="loadTicket(4)">
+      <div class="scenario-outcome outcome-depends">🟡 Depends on Policy</div>
+      <div class="scenario-name">Late Refund Request</div>
+      <div class="scenario-preview">I purchased a product 60 days ago and I'm not happy with it. I would like a full refund. I know it might be past the return window but I feel I deserve one.</div>
+      <div class="scenario-use">Tests: policy retrieval decides outcome</div>
+    </div>
+    <div class="scenario-card" onclick="loadTicket(5)">
+      <div class="scenario-outcome outcome-escalate">🚨 Expected: ESCALATE (Fraud)</div>
+      <div class="scenario-name">Suspected Fraud</div>
+      <div class="scenario-preview">I think I was scammed. I paid for the premium plan two weeks ago but my account still shows free tier. No one replies to my emails. This feels like fraud — I want my money back immediately.</div>
+      <div class="scenario-use">Tests: fraud keywords + sentiment + SLA</div>
+    </div>
+  </div>
+  <textarea id="ticketInput" placeholder="Paste the support ticket here or click a scenario card above…"></textarea>
+  <button class="btn" id="triageBtn" onclick="runTriage()">▶ Run Triage Agent</button>
+  <div class="loader" id="loader">⏳ Agent searching policy document…</div>
+  <div class="result" id="result"></div>
+  <button class="dl-btn" id="dlBtn" onclick="downloadResult()">⬇ Download Triage Result</button>
+</div>
+
+<script>
+const pdfInput=document.getElementById('pdfInput');
+const uploadStatus=document.getElementById('uploadStatus');
+const triageSection=document.getElementById('triageSection');
+const loader=document.getElementById('loader');
+const result=document.getElementById('result');
+const triageBtn=document.getElementById('triageBtn');
+const dlBtn=document.getElementById('dlBtn');
+let _lastResult=null;
+
+const dropZone=document.getElementById('dropZone');
+['dragenter','dragover'].forEach(e=>dropZone.addEventListener(e,ev=>{ev.preventDefault();dropZone.style.borderColor='#f472b6'}));
+['dragleave','drop'].forEach(e=>dropZone.addEventListener(e,ev=>{ev.preventDefault();dropZone.style.borderColor='#334155'}));
+dropZone.addEventListener('drop',ev=>{const f=ev.dataTransfer.files[0];if(f)uploadFile(f)});
+pdfInput.addEventListener('change',()=>{if(pdfInput.files[0])uploadFile(pdfInput.files[0])});
+
+async function uploadFile(file){
+  if(file.size>50*1024*1024){uploadStatus.className='status err';uploadStatus.textContent='✗ File too large ('+(file.size/1024/1024).toFixed(1)+' MB). Maximum is 50 MB.';return;}
+  uploadStatus.className='status';
+  uploadStatus.textContent='Processing…';
+  const fd=new FormData(); fd.append('file',file);
+  try{
+    const r=await fetch('/upload',{method:'POST',body:fd});
+    const d=await r.json();
+    if(!r.ok) throw new Error(d.detail||'Upload failed');
+    uploadStatus.className='status ok';
+    uploadStatus.textContent=`✓ "${d.filename}" — ${d.chunks} chunks indexed.`;
+    triageSection.classList.add('active');
+    dlBtn.style.display='none';
+  }catch(e){
+    uploadStatus.className='status err';
+    uploadStatus.textContent='✗ '+e.message;
+  }
+}
+
+function downloadResult(){
+  if(!_lastResult) return;
+  const {jsPDF}=window.jspdf;
+  const doc=new jsPDF();
+  const W=170,ml=20;
+  let y=20;
+  const nl=(n=6)=>{y+=n;};
+  const addLine=(text,size=11,style='normal',color=[30,30,30])=>{
+    doc.setFontSize(size);doc.setFont('helvetica',style);doc.setTextColor(...color);
+    const lines=doc.splitTextToSize(String(text),W);
+    if(y+lines.length*size*0.4>280){doc.addPage();y=20;}
+    doc.text(lines,ml,y);y+=lines.length*(size*0.45);
+  };
+  const isEsc=_lastResult.decision==='ESCALATE';
+  addLine('Policy Triage Report',16,'bold',[190,24,93]);
+  nl(2);
+  addLine('Generated: '+new Date().toLocaleString(),9,'normal',[120,120,120]);
+  nl(4);
+  doc.setDrawColor(200,200,200);doc.line(ml,y,ml+W,y);nl(6);
+  addLine('DECISION: '+_lastResult.decision,14,'bold',isEsc?[153,27,27]:[6,95,70]);
+  nl(6);
+  addLine('TICKET',10,'bold',[60,60,60]);nl(2);
+  addLine(document.getElementById('ticketInput').value,10);nl(6);
+  addLine('REASON (from policy)',10,'bold',[60,60,60]);nl(2);
+  addLine(_lastResult.reason||'',10);
+  const _pp=toPageArray(_lastResult.policy_pages);if(_pp.length){nl(3);addLine('Pages cited: '+_pp.join(', '),9,'normal',[120,120,120]);}
+  nl(6);
+  addLine('DRAFT REPLY TO CUSTOMER',10,'bold',[60,60,60]);nl(2);
+  addLine(_lastResult.draft_reply||'',10);nl(6);
+  if((_lastResult.agent_steps||[]).length){
+    addLine('AGENT TOOL CALLS',10,'bold',[60,60,60]);nl(2);
+    (_lastResult.agent_steps||[]).forEach((s,i)=>{
+      addLine((i+1)+'. ['+s.tool+'] "'+s.query+'"',9);nl(1);
+      addLine('   '+s.result_preview.slice(0,120)+'...',8,'normal',[120,120,120]);nl(3);
+    });
+  }
+  const ts=new Date().toISOString().replace(/[:.]/g,'-');
+  doc.save('triage_result_'+ts+'.pdf');
+}
+
+async function runTriage(){
+  const ticket=document.getElementById('ticketInput').value.trim();
+  if(!ticket) return;
+  triageBtn.disabled=true;
+  loader.className='loader on';
+  result.style.display='none';
+  dlBtn.style.display='none';
+  try{
+    const r=await fetch('/triage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket})});
+    const d=await r.json();
+    if(!r.ok) throw new Error(d.detail||'Error');
+    renderResult(d);
+    _lastResult=d;
+    dlBtn.style.display='inline-block';
+  }catch(e){
+    result.innerHTML=`<div style="color:#f87171">Error: ${e.message}</div>`;
+    result.style.display='block';
+  }finally{
+    loader.className='loader';
+    triageBtn.disabled=false;
+  }
+}
+
+function toPageArray(raw){
+  if(!raw) return [];
+  if(Array.isArray(raw)) return raw;
+  if(typeof raw==='string') return raw.split(/[,\s]+/).map(Number).filter(n=>!isNaN(n)&&n>0);
+  if(typeof raw==='object') return Object.values(raw).map(Number).filter(n=>!isNaN(n)&&n>0);
+  return [];
+}
+function renderResult(d){
+  const isEscalate=d.decision==='ESCALATE';
+  const pages=toPageArray(d.policy_pages).map(p=>`<div class="page-pill">p.${p}</div>`).join('');
+  const toolIcons={retrieve_policy:'🔍',check_sla_status:'⏱️',classify_sentiment:'😐',escalate_to_human:'🚨'};
+  const steps=(d.agent_steps||[]).map(s=>`
+    <div class="tool-step">
+      <strong>${toolIcons[s.tool]||'🔧'} ${escHtml(s.tool)}:</strong> "${escHtml(s.query)}"<br/>
+      <span style="color:#475569">${escHtml(s.result_preview)}…</span>
+    </div>`).join('');
+
+  result.innerHTML=`
+    <div class="decision-banner ${isEscalate?'escalate':'auto-resolve'}">
+      ${isEscalate?'🚨 ESCALATE TO AGENT':'✅ AUTO-RESOLVE'}
+    </div>
+    ${steps?`<div class="result-card"><h3>Agent Tool Calls</h3>${steps}</div>`:''}
+    <div class="result-card">
+      <h3>Reason (from policy)</h3>
+      <p>${escHtml(d.reason||'')}</p>
+      ${pages?`<div class="page-pills">${pages}</div>`:''}
+    </div>
+    <div class="result-card">
+      <h3>Draft Reply to Customer</h3>
+      <p>${escHtml(d.draft_reply||'')}</p>
+    </div>`;
+  result.style.display='block';
+}
+
+function escHtml(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+
+const _TICKETS=[
+  "I'd like to cancel my subscription and receive a refund. I signed up 3 days ago and haven't used the service at all.",
+  "I am consulting with my lawyer about filing a lawsuit against your company. You have failed to resolve this issue for 3 months and I will pursue legal action immediately.",
+  "Someone hacked into my account last night and made $800 in unauthorized purchases. My personal data and payment details may have been compromised.",
+  "This is absolutely OUTRAGEOUS. I have been waiting 3 weeks with zero response. Your support is the WORST I have ever experienced. I am furious and this is completely unacceptable.",
+  "I purchased a product 60 days ago and I'm not happy with it. I would like a full refund. I know it might be past the return window but I feel I deserve one.",
+  "I think I was scammed. I paid for the premium plan two weeks ago but my account still shows free tier. No one replies to my emails. This feels like fraud — I want my money back immediately.",
+];
+function loadTicket(i){
+  document.getElementById('ticketInput').value=_TICKETS[i];
+  document.getElementById('ticketInput').scrollIntoView({behavior:'smooth',block:'center'});
+}
+</script>
+
+<!-- ══ QA Run History (localStorage, per-browser) ══ -->
+<script>
+(function(){
+  var KEY='qa_hist_app5', MAX=20, TRACK=["/triage"], ACCENT='#f472b6';
+  function load(){try{var v=JSON.parse(localStorage.getItem(KEY));return Array.isArray(v)?v:[]}catch(e){return[]}}
+  function save(l){try{localStorage.setItem(KEY,JSON.stringify(l.slice(0,MAX)))}catch(e){}}
+  function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+  function summarize(d){
+    if(!d||typeof d!=='object')return'';
+    if(d.decision)return'Decision: '+d.decision;
+    if(d.answer)return String(d.answer);
+    if(d.report)return'Report generated ('+Object.keys(d.report).length+' sections)';
+    if(d.faqs)return(d.faqs.length||0)+' FAQs generated';
+    if(d.results)return(d.results.length||0)+' candidate(s) screened';
+    if(d.summary)return String(d.summary);
+    if(d.changes)return(Array.isArray(d.changes)?d.changes.length+' change(s) found':String(d.changes));
+    return JSON.stringify(d).slice(0,140);
+  }
+  function inputOf(opts){
+    try{
+      if(!opts||!opts.body)return'';
+      if(typeof opts.body==='string'){
+        var j=JSON.parse(opts.body);
+        return j.ticket||j.question||j.count&&('count='+j.count)||JSON.stringify(j);
+      }
+      if(opts.body instanceof FormData)return'[file upload]';
+    }catch(e){}
+    return'';
+  }
+  var origFetch=window.fetch;
+  window.fetch=function(url,opts){
+    var p=origFetch.apply(this,arguments);
+    try{
+      var path=(typeof url==='string'?url:(url&&url.url)||'').split('?')[0];
+      var hit=TRACK.some(function(t){return path===t||path.endsWith(t)});
+      if(hit){
+        p.then(function(r){
+          if(!r.ok)return;
+          r.clone().json().then(function(data){
+            var l=load();
+            l.unshift({t:Date.now(),ep:path.replace(/^.*\//,'/'),inp:String(inputOf(opts)).slice(0,140),res:String(summarize(data)).slice(0,180)});
+            save(l);render();
+          }).catch(function(){});
+        }).catch(function(){});
+      }
+    }catch(e){}
+    return p;
+  };
+  function fmtTime(t){
+    var d=new Date(t);
+    return d.toLocaleDateString()+' '+d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+  }
+  var host=null;
+  function ensurePanel(){
+    if(host)return;
+    host=document.createElement('div');
+    host.innerHTML=
+      '<div id="qaHistCard" style="background:#1e293b;border:1px solid #334155;border-radius:12px;padding:24px;width:100%;max-width:800px;margin:0 auto 20px;font-family:inherit">'+
+      '<div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer" id="qaHistHead">'+
+      '<h2 style="font-size:1rem;font-weight:600;color:#cbd5e1;display:flex;align-items:center;gap:8px;margin:0">'+
+      '<span style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:'+ACCENT+'22;border:1px solid '+ACCENT+'55;font-size:.75rem">🕘</span>'+
+      'Recent Runs <span style="font-size:.7rem;color:#64748b;font-weight:400">(this browser only)</span></h2>'+
+      '<span style="display:flex;gap:10px;align-items:center">'+
+      '<button id="qaHistClear" style="background:none;border:1px solid #334155;color:#94a3b8;border-radius:6px;padding:4px 10px;font-size:.72rem;cursor:pointer">Clear</button>'+
+      '<span id="qaHistToggle" style="color:#64748b;font-size:.8rem">▾</span></span></div>'+
+      '<div id="qaHistBody" style="margin-top:14px"></div></div>';
+    document.body.appendChild(host.firstChild);
+    host=document.getElementById('qaHistCard');
+    document.getElementById('qaHistClear').addEventListener('click',function(ev){
+      ev.stopPropagation();
+      if(confirm('Clear run history for this app in this browser?')){try{localStorage.removeItem(KEY)}catch(e){}render();}
+    });
+    document.getElementById('qaHistHead').addEventListener('click',function(){
+      var b=document.getElementById('qaHistBody');
+      var open=b.style.display!=='none';
+      b.style.display=open?'none':'block';
+      document.getElementById('qaHistToggle').textContent=open?'▸':'▾';
+    });
+  }
+  function render(){
+    ensurePanel();
+    var l=load(),b=document.getElementById('qaHistBody');
+    if(!l.length){b.innerHTML='<div style="font-size:.8rem;color:#475569">No runs yet. Results of your test runs will appear here and survive page refresh and server restarts.</div>';return;}
+    b.innerHTML=l.map(function(e){
+      return '<div style="background:#0f172a;border:1px solid #1e293b;border-radius:8px;padding:10px 14px;margin-bottom:8px">'+
+        '<div style="display:flex;justify-content:space-between;gap:10px;margin-bottom:4px">'+
+        '<span style="font-size:.72rem;font-weight:700;color:'+ACCENT+'">'+esc(e.ep)+'</span>'+
+        '<span style="font-size:.68rem;color:#475569">'+esc(fmtTime(e.t))+'</span></div>'+
+        (e.inp?'<div style="font-size:.76rem;color:#94a3b8;margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">IN: '+esc(e.inp)+'</div>':'')+
+        (e.res?'<div style="font-size:.76rem;color:#cbd5e1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">OUT: '+esc(e.res)+'</div>':'')+
+        '</div>';
+    }).join('');
+  }
+  if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',render);}else{render();}
+})();
+</script>
+
+</body>
+</html>

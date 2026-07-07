@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>App 6 — PDF Data Analyst Agent</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:32px 16px}
+  h1{font-size:1.6rem;font-weight:700;color:#22d3ee;margin-bottom:4px}
+  .subtitle{color:#94a3b8;font-size:.9rem;margin-bottom:32px}
+  .card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:24px;width:100%;max-width:800px;margin-bottom:20px}
+  .card h2{font-size:1rem;font-weight:600;color:#cbd5e1;margin-bottom:16px;display:flex;align-items:center;gap:8px}
+  .upload-area{border:2px dashed #334155;border-radius:8px;padding:24px;text-align:center;cursor:pointer;transition:border-color .2s}
+  .upload-area:hover{border-color:#22d3ee}
+  .upload-area input{display:none}
+  .status{font-size:.85rem;color:#94a3b8;margin-top:10px;min-height:20px}
+  .status.ok{color:#4ade80} .status.err{color:#f87171}
+  .analyst-section{display:none}
+  .analyst-section.active{display:block}
+  .input-row{display:flex;gap:10px;margin-top:0}
+  input[type=text]{flex:1;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#e2e8f0;padding:12px;font-size:.9rem}
+  input[type=text]:focus{outline:none;border-color:#22d3ee}
+  .btn{background:#0891b2;color:#fff;border:none;border-radius:8px;padding:12px 24px;font-size:.9rem;cursor:pointer;font-weight:600;transition:background .2s;white-space:nowrap}
+  .btn:hover:not(:disabled){background:#0e7490}
+  .btn:disabled{background:#334155;color:#64748b;cursor:not-allowed}
+  .dl-btn{background:#0f172a;color:#22d3ee;border:1px solid #22d3ee;border-radius:8px;padding:7px 16px;font-size:.82rem;cursor:pointer;margin-top:10px;display:none}
+  .dl-btn:hover{background:#22d3ee;color:#0f172a}
+  .loader{display:none;text-align:center;color:#94a3b8;font-size:.85rem;margin-top:12px}
+  .loader.on{display:block}
+  .result{display:none;margin-top:20px}
+  .answer-box{background:#0f172a;border:1px solid #22d3ee;border-radius:8px;padding:16px;font-size:.9rem;line-height:1.7;white-space:pre-wrap;margin-bottom:12px}
+  .steps-title{font-size:.85rem;font-weight:600;color:#64748b;margin-bottom:8px;cursor:pointer;user-select:none}
+  .step{background:#0f172a;border:1px solid #334155;border-radius:6px;padding:10px 14px;margin-bottom:8px;font-size:.8rem}
+  .step-header{display:flex;align-items:center;gap:8px;font-weight:600;margin-bottom:4px}
+  .step-tool{color:#22d3ee}
+  .step-error{color:#f87171}
+  .step-body{color:#64748b;white-space:pre-wrap;font-family:monospace;font-size:.75rem}
+  .badge{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:#0891b2;font-size:.7rem;font-weight:700}
+  .retry-badge{background:#fef3c7;color:#92400e;border-radius:10px;padding:1px 8px;font-size:.72rem}
+  .examples{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+  .example-pill{background:#0f172a;border:1px solid #334155;border-radius:20px;padding:6px 14px;font-size:.78rem;color:#94a3b8;cursor:pointer;transition:border-color .2s}
+  .example-pill:hover{border-color:#22d3ee;color:#22d3ee}
+  .turn{border-bottom:1px solid #1e293b;padding-bottom:16px;margin-bottom:16px}
+  .turn:last-child{border-bottom:none;margin-bottom:0;padding-bottom:0}
+  .turn-q{font-size:.85rem;font-weight:700;color:#67e8f9;margin-bottom:8px}
+  .clear-btn{background:transparent;color:#64748b;border:1px solid #334155;border-radius:8px;padding:5px 12px;font-size:.75rem;cursor:pointer;margin-left:auto}
+  .clear-btn:hover{border-color:#f87171;color:#f87171}
+  .section-toolbar{display:flex;align-items:center;width:100%}
+  .scenario-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px;margin-top:4px}
+  .scenario-card{background:#0f172a;border:1px solid #334155;border-radius:8px;padding:12px 14px}
+  .scenario-label{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px}
+  .scenario-label.green{color:#4ade80}.scenario-label.yellow{color:#fbbf24}.scenario-label.red{color:#f87171}.scenario-label.blue{color:#60a5fa}
+  .scenario-title{font-size:.85rem;font-weight:600;color:#e2e8f0;margin-bottom:4px}
+  .scenario-desc{font-size:.75rem;color:#64748b;line-height:1.45}
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+<body>
+<h1>PDF Data Analyst Agent</h1>
+<p class="subtitle">Upload a PDF with tables or numbers → ask data questions → agent extracts, computes, and cites.</p>
+
+<div class="card">
+  <h2><span class="badge">1</span> Upload PDF with data</h2>
+  <div class="upload-area" id="dropZone">
+    <label for="pdfInput">
+      <div style="font-size:2rem">📊</div>
+      <div style="margin-top:8px;font-weight:600">Drop PDF here or click to browse</div>
+      <div style="font-size:.8rem;color:#64748b;margin-top:4px">Works best with PDFs containing tables, numbers, or statistics</div>
+      <input type="file" id="pdfInput" accept=".pdf"/>
+    </label>
+  </div>
+  <div class="status" id="uploadStatus"></div>
+</div>
+
+<div class="card analyst-section" id="analystSection">
+  <div class="section-toolbar">
+    <h2><span class="badge">2</span> Ask data questions (conversation has memory)</h2>
+    <button class="clear-btn" onclick="clearChat()">🗑 Clear Conversation</button>
+  </div>
+  <div class="input-row">
+    <input type="text" id="questionInput" placeholder="e.g. What is the total revenue across all regions?"/>
+    <button class="btn" id="askBtn" onclick="analyze()">Analyze</button>
+  </div>
+  <div class="examples" id="examples">
+    <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#475569;width:100%;margin-bottom:2px">Turn 1 — start here</div>
+    <div class="example-pill" onclick="setQ(this)">Which category has the highest number?</div>
+    <div class="example-pill" onclick="setQ(this)">What is the total sum of all figures?</div>
+    <div class="example-pill" onclick="setQ(this)">What is the average value across all entries?</div>
+    <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#475569;width:100%;margin-top:8px;margin-bottom:2px">Turn 2 — follow-up (tests memory)</div>
+    <div class="example-pill" onclick="setQ(this)">What percentage does the top item represent of the total?</div>
+    <div class="example-pill" onclick="setQ(this)">How does the lowest value compare to the average?</div>
+    <div class="example-pill" onclick="setQ(this)">Which item is closest to the mean?</div>
+    <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#475569;width:100%;margin-top:8px;margin-bottom:2px">Turn 3 — recall (tests recall_previous_answer tool)</div>
+    <div class="example-pill" onclick="setQ(this)">Remind me what the highest category was</div>
+    <div class="example-pill" onclick="setQ(this)">What was the total we calculated earlier?</div>
+    <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#475569;width:100%;margin-top:8px;margin-bottom:2px">Edge cases</div>
+    <div class="example-pill" onclick="setQ(this)">What is the median value?</div>
+    <div class="example-pill" onclick="setQ(this)">What information is NOT present in this document?</div>
+  </div>
+  <div class="loader" id="loader">⏳ Agent extracting data and computing…</div>
+  <div class="result" id="result" style="display:block"></div>
+  <button class="dl-btn" id="dlBtn" onclick="downloadResult()">⬇ Download Last Analysis</button>
+</div>
+
+<div class="card">
+  <h2><span class="badge">3</span> QA Test Scenarios</h2>
+  <div class="scenario-grid">
+    <div class="scenario-card">
+      <div class="scenario-label green">Happy Path</div>
+      <div class="scenario-title">Basic Retrieval</div>
+      <div class="scenario-desc">Ask "Which category has the highest number?" Expect: agent calls retrieve_data, finds the answer, cites a page number.</div>
+    </div>
+    <div class="scenario-card">
+      <div class="scenario-label blue">Computation</div>
+      <div class="scenario-title">Python Calculation</div>
+      <div class="scenario-desc">Ask "What is the total sum of all figures?" Expect: agent calls run_python to compute the sum — check the code + output in agent steps.</div>
+    </div>
+    <div class="scenario-card">
+      <div class="scenario-label green">Multi-Turn Memory</div>
+      <div class="scenario-title">Follow-Up Question</div>
+      <div class="scenario-desc">Ask two related questions in sequence. The second should reference the first answer. Expect: contextual, consistent answers without repeating retrieval.</div>
+    </div>
+    <div class="scenario-card">
+      <div class="scenario-label yellow">Memory Tool</div>
+      <div class="scenario-title">Recall Previous Answer</div>
+      <div class="scenario-desc">After asking 2+ questions, ask "Remind me what the highest category was." Expect: agent calls recall_previous_answer tool, returns prior answer.</div>
+    </div>
+    <div class="scenario-card">
+      <div class="scenario-label yellow">Reset Test</div>
+      <div class="scenario-title">Clear Conversation</div>
+      <div class="scenario-desc">Ask a question, note the answer, then click "Clear Conversation" and ask "What was the total we calculated earlier?" Expect: agent has no memory of it.</div>
+    </div>
+    <div class="scenario-card">
+      <div class="scenario-label red">Out-of-Scope</div>
+      <div class="scenario-title">Unanswerable Question</div>
+      <div class="scenario-desc">Ask "What information is NOT present in this document?" Expect: agent acknowledges it can only answer from retrieved content — not fabricate missing data.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const pdfInput=document.getElementById('pdfInput');
+const uploadStatus=document.getElementById('uploadStatus');
+const analystSection=document.getElementById('analystSection');
+const loader=document.getElementById('loader');
+const result=document.getElementById('result');
+const askBtn=document.getElementById('askBtn');
+const dlBtn=document.getElementById('dlBtn');
+let _lastResult=null;
+
+const dropZone=document.getElementById('dropZone');
+['dragenter','dragover'].forEach(e=>dropZone.addEventListener(e,ev=>{ev.preventDefault();dropZone.style.borderColor='#22d3ee'}));
+['dragleave','drop'].forEach(e=>dropZone.addEventListener(e,ev=>{ev.preventDefault();dropZone.style.borderColor='#334155'}));
+dropZone.addEventListener('drop',ev=>{const f=ev.dataTransfer.files[0];if(f)uploadFile(f)});
+pdfInput.addEventListener('change',()=>{if(pdfInput.files[0])uploadFile(pdfInput.files[0])});
+
+async function uploadFile(file){
+  if(file.size>50*1024*1024){uploadStatus.className='status err';uploadStatus.textContent='✗ File too large ('+(file.size/1024/1024).toFixed(1)+' MB). Maximum is 50 MB.';return;}
+  uploadStatus.className='status';
+  uploadStatus.textContent='Processing…';
+  const fd=new FormData(); fd.append('file',file);
+  try{
+    const r=await fetch('/upload',{method:'POST',body:fd});
+    const d=await r.json();
+    if(!r.ok) throw new Error(d.detail||'Upload failed');
+    uploadStatus.className='status ok';
+    uploadStatus.textContent=`✓ "${d.filename}" — ${d.chunks} chunks indexed.`;
+    analystSection.classList.add('active');
+    dlBtn.style.display='none';
+    result.innerHTML='';
+  }catch(e){
+    uploadStatus.className='status err';
+    uploadStatus.textContent='✗ '+e.message;
+  }
+}
+
+function downloadResult(){
+  if(!_lastResult) return;
+  const {jsPDF}=window.jspdf;
+  const doc=new jsPDF();
+  const W=170,ml=20;
+  let y=20;
+  const nl=(n=6)=>{y+=n;};
+  const addLine=(text,size=11,style='normal',color=[30,30,30])=>{
+    doc.setFontSize(size);doc.setFont('helvetica',style);doc.setTextColor(...color);
+    const lines=doc.splitTextToSize(String(text),W);
+    if(y+lines.length*size*0.4>280){doc.addPage();y=20;}
+    doc.text(lines,ml,y);y+=lines.length*(size*0.45);
+  };
+  addLine('Data Analysis Report — PDF Data Analyst Agent',16,'bold',[8,145,178]);
+  nl(2);
+  addLine('Generated: '+new Date().toLocaleString(),9,'normal',[120,120,120]);
+  nl(4);
+  doc.setDrawColor(200,200,200);doc.line(ml,y,ml+W,y);nl(6);
+  addLine('QUESTION',10,'bold',[60,60,60]);nl(2);
+  addLine(document.getElementById('questionInput').value,11);nl(6);
+  addLine('ANSWER',10,'bold',[60,60,60]);nl(2);
+  addLine(_lastResult.answer,11);nl(6);
+  if((_lastResult.agent_steps||[]).length){
+    addLine('AGENT STEPS ('+_lastResult.agent_steps.length+')',10,'bold',[60,60,60]);nl(2);
+    (_lastResult.agent_steps||[]).forEach((s,i)=>{
+      const isCode=s.tool==='run_python';
+      const inp=isCode?(s.input.code||''):(s.input.query||'');
+      addLine((i+1)+'. ['+s.tool+']'+(s.error?' ⚠ retry '+s.retry:''),9,'bold',s.error?[220,38,38]:[34,211,238]);
+      nl(2);
+      addLine((isCode?'Code: ':'Query: ')+inp.slice(0,200),8,'normal',[80,80,80]);
+      nl(1);
+      addLine('Output: '+s.output.slice(0,200),8,'normal',[120,120,120]);
+      nl(4);
+    });
+  }
+  const ts=new Date().toISOString().replace(/[:.]/g,'-');
+  doc.save('analysis_'+ts+'.pdf');
+}
+
+function setQ(el){document.getElementById('questionInput').value=el.textContent.trim();}
+document.getElementById('questionInput').addEventListener('keydown',e=>{if(e.key==='Enter')analyze()});
+
+let _turnCount=0;
+
+async function analyze(){
+  const q=document.getElementById('questionInput').value.trim();
+  if(!q) return;
+  askBtn.disabled=true;
+  loader.className='loader on';
+  dlBtn.style.display='none';
+  document.getElementById('questionInput').value='';
+  try{
+    const r=await fetch('/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q})});
+    const d=await r.json();
+    if(!r.ok) throw new Error(d.detail||'Error');
+    appendTurn(q,d);
+    _lastResult=d;
+    dlBtn.style.display='inline-block';
+  }catch(e){
+    result.innerHTML+=`<div class="turn"><div class="turn-q">Q: ${escHtml(q)}</div><div style="color:#f87171">Error: ${escHtml(e.message)}</div></div>`;
+  }finally{
+    loader.className='loader';
+    askBtn.disabled=false;
+  }
+}
+
+async function clearChat(){
+  await fetch('/reset-chat',{method:'POST'});
+  result.innerHTML='';
+  _turnCount=0;
+  dlBtn.style.display='none';
+}
+
+function appendTurn(question,d){
+  const turnId='turn-'+(_turnCount++);
+  const steps=(d.agent_steps||[]).map(s=>{
+    const isCode=s.tool==='run_python';
+    const input=isCode?(s.input.code||''):(s.input.query||s.input.topic||JSON.stringify(s.input));
+    return `<div class="step">
+      <div class="step-header">
+        <span class="step-tool ${s.error?'step-error':''}">${s.error?'⚠️':'✓'} ${s.tool}</span>
+        ${s.error?`<span class="retry-badge">retry ${s.retry}</span>`:''}
+      </div>
+      <div class="step-body">${isCode?'Code: ':'Input: '}${escHtml(String(input).slice(0,300))}
+Output: ${escHtml(s.output)}</div>
+    </div>`;
+  }).join('');
+
+  result.innerHTML+=`
+    <div class="turn" id="${turnId}">
+      <div class="turn-q">Q: ${escHtml(question)}</div>
+      <div class="answer-box">${escHtml(d.answer)}</div>
+      ${steps?`<div class="steps-title" onclick="toggleSteps('${turnId}')">▶ Show agent steps (${(d.agent_steps||[]).length})</div>
+      <div class="steps-body" id="${turnId}-steps" style="display:none">${steps}</div>`:''}
+    </div>`;
+  result.scrollTop=result.scrollHeight;
+}
+
+function toggleSteps(turnId){
+  const body=document.getElementById(turnId+'-steps');
+  const el=document.querySelector(`#${turnId} .steps-title`);
+  const show=body.style.display==='none';
+  body.style.display=show?'block':'none';
+  el.textContent=(show?'▼':'▶')+el.textContent.slice(1);
+}
+
+function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+</script>
+
+<!-- ══ QA Run History (localStorage, per-browser) ══ -->
+<script>
+(function(){
+  var KEY='qa_hist_app6', MAX=20, TRACK=["/analyze"], ACCENT='#a855f7';
+  function load(){try{var v=JSON.parse(localStorage.getItem(KEY));return Array.isArray(v)?v:[]}catch(e){return[]}}
+  function save(l){try{localStorage.setItem(KEY,JSON.stringify(l.slice(0,MAX)))}catch(e){}}
+  function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+  function summarize(d){
+    if(!d||typeof d!=='object')return'';
+    if(d.decision)return'Decision: '+d.decision;
+    if(d.answer)return String(d.answer);
+    if(d.report)return'Report generated ('+Object.keys(d.report).length+' sections)';
+    if(d.faqs)return(d.faqs.length||0)+' FAQs generated';
+    if(d.results)return(d.results.length||0)+' candidate(s) screened';
+    if(d.summary)return String(d.summary);
+    if(d.changes)return(Array.isArray(d.changes)?d.changes.length+' change(s) found':String(d.changes));
+    return JSON.stringify(d).slice(0,140);
+  }
+  function inputOf(opts){
+    try{
+      if(!opts||!opts.body)return'';
+      if(typeof opts.body==='string'){
+        var j=JSON.parse(opts.body);
+        return j.ticket||j.question||j.count&&('count='+j.count)||JSON.stringify(j);
+      }
+      if(opts.body instanceof FormData)return'[file upload]';
+    }catch(e){}
+    return'';
+  }
+  var origFetch=window.fetch;
+  window.fetch=function(url,opts){
+    var p=origFetch.apply(this,arguments);
+    try{
+      var path=(typeof url==='string'?url:(url&&url.url)||'').split('?')[0];
+      var hit=TRACK.some(function(t){return path===t||path.endsWith(t)});
+      if(hit){
+        p.then(function(r){
+          if(!r.ok)return;
+          r.clone().json().then(function(data){
+            var l=load();
+            l.unshift({t:Date.now(),ep:path.replace(/^.*\//,'/'),inp:String(inputOf(opts)).slice(0,140),res:String(summarize(data)).slice(0,180)});
+            save(l);render();
+          }).catch(function(){});
+        }).catch(function(){});
+      }
+    }catch(e){}
+    return p;
+  };
+  function fmtTime(t){
+    var d=new Date(t);
+    return d.toLocaleDateString()+' '+d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+  }
+  var host=null;
+  function ensurePanel(){
+    if(host)return;
+    host=document.createElement('div');
+    host.innerHTML=
+      '<div id="qaHistCard" style="background:#1e293b;border:1px solid #334155;border-radius:12px;padding:24px;width:100%;max-width:800px;margin:0 auto 20px;font-family:inherit">'+
+      '<div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer" id="qaHistHead">'+
+      '<h2 style="font-size:1rem;font-weight:600;color:#cbd5e1;display:flex;align-items:center;gap:8px;margin:0">'+
+      '<span style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:'+ACCENT+'22;border:1px solid '+ACCENT+'55;font-size:.75rem">🕘</span>'+
+      'Recent Runs <span style="font-size:.7rem;color:#64748b;font-weight:400">(this browser only)</span></h2>'+
+      '<span style="display:flex;gap:10px;align-items:center">'+
+      '<button id="qaHistClear" style="background:none;border:1px solid #334155;color:#94a3b8;border-radius:6px;padding:4px 10px;font-size:.72rem;cursor:pointer">Clear</button>'+
+      '<span id="qaHistToggle" style="color:#64748b;font-size:.8rem">▾</span></span></div>'+
+      '<div id="qaHistBody" style="margin-top:14px"></div></div>';
+    document.body.appendChild(host.firstChild);
+    host=document.getElementById('qaHistCard');
+    document.getElementById('qaHistClear').addEventListener('click',function(ev){
+      ev.stopPropagation();
+      if(confirm('Clear run history for this app in this browser?')){try{localStorage.removeItem(KEY)}catch(e){}render();}
+    });
+    document.getElementById('qaHistHead').addEventListener('click',function(){
+      var b=document.getElementById('qaHistBody');
+      var open=b.style.display!=='none';
+      b.style.display=open?'none':'block';
+      document.getElementById('qaHistToggle').textContent=open?'▸':'▾';
+    });
+  }
+  function render(){
+    ensurePanel();
+    var l=load(),b=document.getElementById('qaHistBody');
+    if(!l.length){b.innerHTML='<div style="font-size:.8rem;color:#475569">No runs yet. Results of your test runs will appear here and survive page refresh and server restarts.</div>';return;}
+    b.innerHTML=l.map(function(e){
+      return '<div style="background:#0f172a;border:1px solid #1e293b;border-radius:8px;padding:10px 14px;margin-bottom:8px">'+
+        '<div style="display:flex;justify-content:space-between;gap:10px;margin-bottom:4px">'+
+        '<span style="font-size:.72rem;font-weight:700;color:'+ACCENT+'">'+esc(e.ep)+'</span>'+
+        '<span style="font-size:.68rem;color:#475569">'+esc(fmtTime(e.t))+'</span></div>'+
+        (e.inp?'<div style="font-size:.76rem;color:#94a3b8;margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">IN: '+esc(e.inp)+'</div>':'')+
+        (e.res?'<div style="font-size:.76rem;color:#cbd5e1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">OUT: '+esc(e.res)+'</div>':'')+
+        '</div>';
+    }).join('');
+  }
+  if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',render);}else{render();}
+})();
+</script>
+
+</body>
+</html>

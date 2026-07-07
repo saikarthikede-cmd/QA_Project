@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>App 2 — Document Diff Analyzer</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:32px 16px}
+  h1{font-size:1.6rem;font-weight:700;color:#2dd4bf;margin-bottom:4px}
+  .subtitle{color:#94a3b8;font-size:.9rem;margin-bottom:32px}
+  .card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:24px;width:100%;max-width:860px;margin-bottom:20px}
+  .card h2{font-size:1rem;font-weight:600;color:#cbd5e1;margin-bottom:16px;display:flex;align-items:center;gap:8px}
+  .upload-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .upload-box{border:2px dashed #334155;border-radius:8px;padding:20px;text-align:center;cursor:pointer;transition:border-color .2s}
+  .upload-box:hover,.upload-box.drag{border-color:#2dd4bf}
+  .upload-box.loaded{border-color:#2dd4bf;border-style:solid;background:rgba(45,212,191,.05)}
+  .upload-box input{display:none}
+  .upload-box label{cursor:pointer;display:block}
+  .box-label{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;color:#64748b}
+  .status{font-size:.8rem;margin-top:6px;min-height:16px;color:#94a3b8}
+  .status.ok{color:#4ade80}.status.err{color:#f87171}
+  .btn{background:#0d9488;color:#fff;border:none;border-radius:8px;padding:11px 28px;font-size:.95rem;cursor:pointer;font-weight:600;transition:background .2s;width:100%}
+  .btn:hover:not(:disabled){background:#0f766e}
+  .btn:disabled{background:#334155;color:#64748b;cursor:not-allowed}
+  .dl-btn{background:#0f172a;color:#2dd4bf;border:1px solid #2dd4bf;border-radius:8px;padding:7px 16px;font-size:.82rem;cursor:pointer;margin-top:12px;display:none}
+  .dl-btn:hover{background:#2dd4bf;color:#0f172a}
+  .loader{display:none;text-align:center;color:#94a3b8;font-size:.85rem;margin-top:12px}
+  .loader.on{display:block}
+  .badge{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:#0d9488;font-size:.7rem;font-weight:700}
+  .results{display:none;margin-top:4px}
+  .results.active{display:block}
+  .severity-banner{border-radius:10px;padding:14px 20px;font-size:.95rem;font-weight:700;display:flex;align-items:center;gap:10px;margin-bottom:16px}
+  .sev-minor{background:#d1fae5;color:#065f46;border:2px solid #6ee7b7}
+  .sev-moderate{background:#fef3c7;color:#92400e;border:2px solid #fcd34d}
+  .sev-major{background:#fee2e2;color:#991b1b;border:2px solid #fca5a5}
+  .summary-box{background:#0f172a;border:1px solid #334155;border-radius:8px;padding:14px;margin-bottom:16px;font-size:.88rem;line-height:1.6;color:#cbd5e1}
+  .diff-section{margin-bottom:16px}
+  .diff-header{font-size:.85rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;display:flex;align-items:center;gap:6px}
+  .diff-added .diff-header{color:#4ade80}
+  .diff-removed .diff-header{color:#f87171}
+  .diff-modified .diff-header{color:#fbbf24}
+  .change-card{border-radius:8px;padding:12px 14px;margin-bottom:8px;font-size:.84rem;line-height:1.5}
+  .added-card{background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.25)}
+  .removed-card{background:rgba(248,113,113,.08);border:1px solid rgba(248,113,113,.25)}
+  .modified-card{background:rgba(251,191,36,.07);border:1px solid rgba(251,191,36,.2)}
+  .change-loc{font-size:.72rem;color:#64748b;margin-bottom:4px}
+  .modified-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px}
+  .mod-old{background:rgba(248,113,113,.1);border-radius:4px;padding:6px 8px;font-size:.8rem;color:#fca5a5}
+  .mod-new{background:rgba(34,197,94,.1);border-radius:4px;padding:6px 8px;font-size:.8rem;color:#86efac}
+  .mod-label{font-size:.65rem;font-weight:700;color:#64748b;margin-bottom:3px;text-transform:uppercase}
+  .empty-state{color:#64748b;font-size:.84rem;font-style:italic;padding:8px 0}
+  .meta-box{margin-top:8px;font-size:.72rem;color:#64748b;background:#0f172a;border:1px solid #334155;border-radius:6px;padding:8px 10px;text-align:left}
+  .meta-row{display:flex;justify-content:space-between;padding:1px 0}
+  .meta-row span:last-child{color:#94a3b8}
+  .scenario-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px;margin-top:4px}
+  .scenario-card{background:#0f172a;border:1px solid #334155;border-radius:8px;padding:12px 14px}
+  .scenario-label{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px}
+  .scenario-label.green{color:#4ade80}.scenario-label.yellow{color:#fbbf24}.scenario-label.red{color:#f87171}.scenario-label.blue{color:#60a5fa}
+  .scenario-title{font-size:.85rem;font-weight:600;color:#e2e8f0;margin-bottom:4px}
+  .scenario-desc{font-size:.75rem;color:#64748b;line-height:1.45}
+</style>
+</head>
+<body>
+<h1>Document Diff Analyzer</h1>
+<p class="subtitle">Upload two versions of a document — AI finds exactly what changed, was added, or removed.</p>
+
+<div class="card">
+  <h2><span class="badge">1</span> Upload Both Documents</h2>
+  <div class="upload-grid">
+    <div>
+      <div class="upload-box" id="zoneA">
+        <label for="inputA">
+          <div class="box-label">Document A — Original</div>
+          <div style="font-size:1.8rem">📄</div>
+          <div style="margin-top:6px;font-size:.88rem;font-weight:600">Drop or click to browse</div>
+          <input type="file" id="inputA" accept=".pdf"/>
+        </label>
+      </div>
+      <div class="status" id="statusA"></div>
+      <div class="meta-box" id="metaA" style="display:none"></div>
+    </div>
+    <div>
+      <div class="upload-box" id="zoneB">
+        <label for="inputB">
+          <div class="box-label">Document B — Revised</div>
+          <div style="font-size:1.8rem">📄</div>
+          <div style="margin-top:6px;font-size:.88rem;font-weight:600">Drop or click to browse</div>
+          <input type="file" id="inputB" accept=".pdf"/>
+        </label>
+      </div>
+      <div class="status" id="statusB"></div>
+      <div class="meta-box" id="metaB" style="display:none"></div>
+    </div>
+  </div>
+  <div style="margin-top:16px">
+    <button class="btn" id="analyzeBtn" onclick="analyze()" disabled>🔍 Analyze Changes</button>
+  </div>
+  <div class="loader" id="loader">⏳ Comparing documents…</div>
+</div>
+
+<div class="card">
+  <h2><span class="badge">2</span> Diff Results</h2>
+  <div class="results" id="results">
+    <div id="severityBanner"></div>
+    <div class="summary-box" id="summaryBox"></div>
+    <div class="diff-section diff-added">
+      <div class="diff-header">➕ Added</div>
+      <div id="addedList"></div>
+    </div>
+    <div class="diff-section diff-removed">
+      <div class="diff-header">➖ Removed</div>
+      <div id="removedList"></div>
+    </div>
+    <div class="diff-section diff-modified">
+      <div class="diff-header">✏️ Modified</div>
+      <div id="modifiedList"></div>
+    </div>
+  </div>
+  <div id="placeholder" style="color:#475569;font-size:.88rem">Upload both documents and click Analyze to see changes.</div>
+  <button class="dl-btn" id="dlBtn" onclick="downloadReport()">⬇ Download Diff Report (PDF)</button>
+</div>
+
+<div class="card">
+  <h2><span class="badge">3</span> QA Test Scenarios</h2>
+  <div class="scenario-grid">
+    <div class="scenario-card">
+      <div class="scenario-label green">Happy Path</div>
+      <div class="scenario-title">Near-Identical Docs</div>
+      <div class="scenario-desc">Upload two versions of the same policy with 1–2 small edits. Expect: <strong>Minor</strong> severity, few modified items, high overlap.</div>
+    </div>
+    <div class="scenario-card">
+      <div class="scenario-label red">Major Change</div>
+      <div class="scenario-title">Heavily Revised Doc</div>
+      <div class="scenario-desc">Upload an original doc and a significantly rewritten version. Expect: <strong>Major</strong> severity, many added/removed/modified items.</div>
+    </div>
+    <div class="scenario-card">
+      <div class="scenario-label yellow">Edge Case</div>
+      <div class="scenario-title">Same Doc Both Slots</div>
+      <div class="scenario-desc">Upload the exact same PDF as both A and B. Expect: <strong>Minor</strong> severity, 0 or near-zero changes, "nothing changed" summary.</div>
+    </div>
+    <div class="scenario-card">
+      <div class="scenario-label blue">Cross-Domain</div>
+      <div class="scenario-title">Completely Different Docs</div>
+      <div class="scenario-desc">Upload two unrelated PDFs (e.g. a resume vs a policy). Expect: many removals/additions, near-zero modified, confusing summary.</div>
+    </div>
+    <div class="scenario-card">
+      <div class="scenario-label green">Metadata Check</div>
+      <div class="scenario-title">Verify PDF Metadata</div>
+      <div class="scenario-desc">After upload, inspect the metadata box: page count, word count, file size, author/title fields. Verify they match the actual PDF properties.</div>
+    </div>
+    <div class="scenario-card">
+      <div class="scenario-label yellow">Error Handling</div>
+      <div class="scenario-title">Analyze Without Upload</div>
+      <div class="scenario-desc">Click Analyze without uploading both files. Expect: clear error message, button stays disabled until both docs loaded.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const inputA=document.getElementById('inputA');
+const inputB=document.getElementById('inputB');
+const statusA=document.getElementById('statusA');
+const statusB=document.getElementById('statusB');
+const analyzeBtn=document.getElementById('analyzeBtn');
+const loader=document.getElementById('loader');
+const results=document.getElementById('results');
+const placeholder=document.getElementById('placeholder');
+const dlBtn=document.getElementById('dlBtn');
+let _loaded={a:false,b:false};
+let _lastResult=null;
+
+function setupDrop(zone,input,key,statusEl){
+  ['dragenter','dragover'].forEach(e=>zone.addEventListener(e,ev=>{ev.preventDefault();zone.classList.add('drag')}));
+  ['dragleave','drop'].forEach(e=>zone.addEventListener(e,ev=>{ev.preventDefault();zone.classList.remove('drag')}));
+  zone.addEventListener('drop',ev=>{const f=ev.dataTransfer.files[0];if(f)upload(f,key,statusEl,zone)});
+  input.addEventListener('change',()=>{if(input.files[0])upload(input.files[0],key,statusEl,zone)});
+}
+setupDrop(document.getElementById('zoneA'),inputA,'a',statusA);
+setupDrop(document.getElementById('zoneB'),inputB,'b',statusB);
+
+async function upload(file,key,statusEl,zone){
+  if(file.size>50*1024*1024){statusEl.className='status err';statusEl.textContent='✗ File too large (max 50 MB).';return;}
+  statusEl.className='status';statusEl.textContent='Uploading…';
+  const fd=new FormData();fd.append('file',file);
+  try{
+    const r=await fetch('/upload-'+key,{method:'POST',body:fd});
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.detail||'Upload failed');
+    statusEl.className='status ok';
+    statusEl.textContent=`✓ ${d.filename} (${d.pages} pages)`;
+    zone.classList.add('loaded');
+    _loaded[key]=true;
+    const m=d.metadata||{};
+    const metaEl=document.getElementById('meta'+key.toUpperCase());
+    metaEl.style.display='block';
+    metaEl.innerHTML=[
+      ['Pages',m.page_count],['Size',m.file_size_kb+' KB'],['Words',m.word_count],
+      ['Chars',m.char_count],['Chunks',m.chunk_count],
+      m.author?['Author',m.author]:null,
+      m.title?['Title',m.title]:null,
+      m.creator?['Creator',m.creator]:null,
+    ].filter(Boolean).map(([k,v])=>`<div class="meta-row"><span>${k}</span><span>${esc(String(v))}</span></div>`).join('');
+    if(_loaded.a&&_loaded.b)analyzeBtn.disabled=false;
+  }catch(e){statusEl.className='status err';statusEl.textContent='✗ '+e.message;}
+}
+
+async function analyze(){
+  analyzeBtn.disabled=true;
+  loader.className='loader on';
+  results.classList.remove('active');
+  placeholder.style.display='none';
+  dlBtn.style.display='none';
+  try{
+    const r=await fetch('/analyze',{method:'POST'});
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.detail||'Error');
+    _lastResult=d;
+    renderResults(d);
+    results.classList.add('active');
+    dlBtn.style.display='inline-block';
+  }catch(e){
+    placeholder.textContent='Error: '+e.message;
+    placeholder.style.color='#f87171';
+    placeholder.style.display='block';
+  }finally{loader.className='loader';analyzeBtn.disabled=false;}
+}
+
+function sevClass(s){return s==='Minor'?'sev-minor':s==='Major'?'sev-major':'sev-moderate';}
+function sevIcon(s){return s==='Minor'?'🟢':s==='Major'?'🔴':'🟡';}
+
+function renderResults(d){
+  document.getElementById('severityBanner').innerHTML=
+    `<div class="severity-banner ${sevClass(d.severity)}">${sevIcon(d.severity)} ${d.severity} Changes — ${d.change_count||0} total change(s) found</div>`;
+  document.getElementById('summaryBox').textContent=d.summary||'';
+
+  const addedList=document.getElementById('addedList');
+  if((d.added||[]).length){
+    addedList.innerHTML=(d.added||[]).map(a=>`
+      <div class="change-card added-card">
+        <div class="change-loc">📍 ${esc(a.location||'')}</div>
+        <div>${esc(a.content||'')}</div>
+      </div>`).join('');
+  }else{addedList.innerHTML='<div class="empty-state">No additions found.</div>';}
+
+  const removedList=document.getElementById('removedList');
+  if((d.removed||[]).length){
+    removedList.innerHTML=(d.removed||[]).map(a=>`
+      <div class="change-card removed-card">
+        <div class="change-loc">📍 ${esc(a.location||'')}</div>
+        <div>${esc(a.content||'')}</div>
+      </div>`).join('');
+  }else{removedList.innerHTML='<div class="empty-state">No removals found.</div>';}
+
+  const modifiedList=document.getElementById('modifiedList');
+  if((d.modified||[]).length){
+    modifiedList.innerHTML=(d.modified||[]).map(m=>`
+      <div class="change-card modified-card">
+        <div class="change-loc">📍 ${esc(m.location||'')}</div>
+        <div class="modified-row">
+          <div><div class="mod-label">Before</div><div class="mod-old">${esc(m.original||'')}</div></div>
+          <div><div class="mod-label">After</div><div class="mod-new">${esc(m.revised||'')}</div></div>
+        </div>
+      </div>`).join('');
+  }else{modifiedList.innerHTML='<div class="empty-state">No modifications found.</div>';}
+}
+
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+
+function downloadReport(){
+  if(!_lastResult) return;
+  const {jsPDF}=window.jspdf;
+  const doc=new jsPDF();
+  const W=170,ml=20;let y=20;
+  const nl=(n=5)=>{y+=n;};
+  const addLine=(text,size=11,style='normal',color=[30,30,30])=>{
+    doc.setFontSize(size);doc.setFont('helvetica',style);doc.setTextColor(...color);
+    const lines=doc.splitTextToSize(String(text||''),W);
+    if(y+lines.length*size*0.4>280){doc.addPage();y=20;}
+    doc.text(lines,ml,y);y+=lines.length*(size*0.45);
+  };
+  addLine('Document Diff Report',16,'bold',[13,148,136]);nl(2);
+  addLine('Generated: '+new Date().toLocaleString(),9,'normal',[120,120,120]);
+  addLine('Doc A: '+_lastResult.doc_a+'   →   Doc B: '+_lastResult.doc_b,9,'normal',[120,120,120]);nl(4);
+  doc.setDrawColor(200,200,200);doc.line(ml,y,ml+W,y);nl(6);
+  addLine('SEVERITY: '+_lastResult.severity+' ('+(_lastResult.change_count||0)+' changes)',12,'bold',_lastResult.severity==='Major'?[220,38,38]:_lastResult.severity==='Minor'?[22,163,74]:[217,119,6]);nl(4);
+  addLine('SUMMARY',10,'bold',[60,60,60]);nl(2);addLine(_lastResult.summary||'',10);nl(6);
+  if((_lastResult.added||[]).length){
+    addLine('ADDED ('+_lastResult.added.length+')',10,'bold',[22,163,74]);nl(2);
+    _lastResult.added.forEach(a=>{addLine('  • ['+a.location+'] '+a.content,9);nl(2);});nl(3);
+  }
+  if((_lastResult.removed||[]).length){
+    addLine('REMOVED ('+_lastResult.removed.length+')',10,'bold',[220,38,38]);nl(2);
+    _lastResult.removed.forEach(a=>{addLine('  • ['+a.location+'] '+a.content,9);nl(2);});nl(3);
+  }
+  if((_lastResult.modified||[]).length){
+    addLine('MODIFIED ('+_lastResult.modified.length+')',10,'bold',[217,119,6]);nl(2);
+    _lastResult.modified.forEach(m=>{
+      addLine('  ['+m.location+']',9,'bold');nl(2);
+      addLine('    Before: '+m.original,9,'normal',[200,100,100]);nl(2);
+      addLine('    After:  '+m.revised,9,'normal',[100,200,150]);nl(3);
+    });
+  }
+  doc.save('diff_report_'+new Date().toISOString().replace(/[:.]/g,'-')+'.pdf');
+}
+</script>
+
+<!-- ══ QA Run History (localStorage, per-browser) ══ -->
+<script>
+(function(){
+  var KEY='qa_hist_app2', MAX=20, TRACK=["/analyze"], ACCENT='#0ea5e9';
+  function load(){try{var v=JSON.parse(localStorage.getItem(KEY));return Array.isArray(v)?v:[]}catch(e){return[]}}
+  function save(l){try{localStorage.setItem(KEY,JSON.stringify(l.slice(0,MAX)))}catch(e){}}
+  function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+  function summarize(d){
+    if(!d||typeof d!=='object')return'';
+    if(d.decision)return'Decision: '+d.decision;
+    if(d.answer)return String(d.answer);
+    if(d.report)return'Report generated ('+Object.keys(d.report).length+' sections)';
+    if(d.faqs)return(d.faqs.length||0)+' FAQs generated';
+    if(d.results)return(d.results.length||0)+' candidate(s) screened';
+    if(d.summary)return String(d.summary);
+    if(d.changes)return(Array.isArray(d.changes)?d.changes.length+' change(s) found':String(d.changes));
+    return JSON.stringify(d).slice(0,140);
+  }
+  function inputOf(opts){
+    try{
+      if(!opts||!opts.body)return'';
+      if(typeof opts.body==='string'){
+        var j=JSON.parse(opts.body);
+        return j.ticket||j.question||j.count&&('count='+j.count)||JSON.stringify(j);
+      }
+      if(opts.body instanceof FormData)return'[file upload]';
+    }catch(e){}
+    return'';
+  }
+  var origFetch=window.fetch;
+  window.fetch=function(url,opts){
+    var p=origFetch.apply(this,arguments);
+    try{
+      var path=(typeof url==='string'?url:(url&&url.url)||'').split('?')[0];
+      var hit=TRACK.some(function(t){return path===t||path.endsWith(t)});
+      if(hit){
+        p.then(function(r){
+          if(!r.ok)return;
+          r.clone().json().then(function(data){
+            var l=load();
+            l.unshift({t:Date.now(),ep:path.replace(/^.*\//,'/'),inp:String(inputOf(opts)).slice(0,140),res:String(summarize(data)).slice(0,180)});
+            save(l);render();
+          }).catch(function(){});
+        }).catch(function(){});
+      }
+    }catch(e){}
+    return p;
+  };
+  function fmtTime(t){
+    var d=new Date(t);
+    return d.toLocaleDateString()+' '+d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+  }
+  var host=null;
+  function ensurePanel(){
+    if(host)return;
+    host=document.createElement('div');
+    host.innerHTML=
+      '<div id="qaHistCard" style="background:#1e293b;border:1px solid #334155;border-radius:12px;padding:24px;width:100%;max-width:800px;margin:0 auto 20px;font-family:inherit">'+
+      '<div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer" id="qaHistHead">'+
+      '<h2 style="font-size:1rem;font-weight:600;color:#cbd5e1;display:flex;align-items:center;gap:8px;margin:0">'+
+      '<span style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:'+ACCENT+'22;border:1px solid '+ACCENT+'55;font-size:.75rem">🕘</span>'+
+      'Recent Runs <span style="font-size:.7rem;color:#64748b;font-weight:400">(this browser only)</span></h2>'+
+      '<span style="display:flex;gap:10px;align-items:center">'+
+      '<button id="qaHistClear" style="background:none;border:1px solid #334155;color:#94a3b8;border-radius:6px;padding:4px 10px;font-size:.72rem;cursor:pointer">Clear</button>'+
+      '<span id="qaHistToggle" style="color:#64748b;font-size:.8rem">▾</span></span></div>'+
+      '<div id="qaHistBody" style="margin-top:14px"></div></div>';
+    document.body.appendChild(host.firstChild);
+    host=document.getElementById('qaHistCard');
+    document.getElementById('qaHistClear').addEventListener('click',function(ev){
+      ev.stopPropagation();
+      if(confirm('Clear run history for this app in this browser?')){try{localStorage.removeItem(KEY)}catch(e){}render();}
+    });
+    document.getElementById('qaHistHead').addEventListener('click',function(){
+      var b=document.getElementById('qaHistBody');
+      var open=b.style.display!=='none';
+      b.style.display=open?'none':'block';
+      document.getElementById('qaHistToggle').textContent=open?'▸':'▾';
+    });
+  }
+  function render(){
+    ensurePanel();
+    var l=load(),b=document.getElementById('qaHistBody');
+    if(!l.length){b.innerHTML='<div style="font-size:.8rem;color:#475569">No runs yet. Results of your test runs will appear here and survive page refresh and server restarts.</div>';return;}
+    b.innerHTML=l.map(function(e){
+      return '<div style="background:#0f172a;border:1px solid #1e293b;border-radius:8px;padding:10px 14px;margin-bottom:8px">'+
+        '<div style="display:flex;justify-content:space-between;gap:10px;margin-bottom:4px">'+
+        '<span style="font-size:.72rem;font-weight:700;color:'+ACCENT+'">'+esc(e.ep)+'</span>'+
+        '<span style="font-size:.68rem;color:#475569">'+esc(fmtTime(e.t))+'</span></div>'+
+        (e.inp?'<div style="font-size:.76rem;color:#94a3b8;margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">IN: '+esc(e.inp)+'</div>':'')+
+        (e.res?'<div style="font-size:.76rem;color:#cbd5e1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">OUT: '+esc(e.res)+'</div>':'')+
+        '</div>';
+    }).join('');
+  }
+  if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',render);}else{render();}
+})();
+</script>
+
+</body>
+</html>

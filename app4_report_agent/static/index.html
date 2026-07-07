@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>App 4 — PDF Report Summarizer Agent</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:32px 16px}
+  h1{font-size:1.6rem;font-weight:700;color:#f59e0b;margin-bottom:4px}
+  .subtitle{color:#94a3b8;font-size:.9rem;margin-bottom:32px}
+  .card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:24px;width:100%;max-width:800px;margin-bottom:20px}
+  .card h2{font-size:1rem;font-weight:600;color:#cbd5e1;margin-bottom:16px;display:flex;align-items:center;gap:8px}
+  .upload-area{border:2px dashed #334155;border-radius:8px;padding:32px;text-align:center;cursor:pointer;transition:border-color .2s}
+  .upload-area:hover{border-color:#f59e0b}
+  .upload-area input{display:none}
+  .status{font-size:.85rem;color:#94a3b8;margin-top:10px;min-height:20px}
+  .status.ok{color:#4ade80} .status.err{color:#f87171}
+  .btn{background:#d97706;color:#fff;border:none;border-radius:8px;padding:12px 28px;font-size:.95rem;cursor:pointer;transition:background .2s;font-weight:600}
+  .btn:hover:not(:disabled){background:#b45309}
+  .btn:disabled{background:#334155;color:#64748b;cursor:not-allowed}
+  .dl-btn{background:#0f172a;color:#f59e0b;border:1px solid #f59e0b;border-radius:8px;padding:7px 16px;font-size:.82rem;cursor:pointer;margin-top:10px;display:none}
+  .dl-btn:hover{background:#f59e0b;color:#0f172a}
+  .report-section{display:none}
+  .report-section.active{display:block}
+  .agent-log{background:#0f172a;border:1px solid #334155;border-radius:8px;padding:14px;margin-bottom:16px;font-size:.82rem;color:#94a3b8;min-height:48px}
+  .agent-step{padding:3px 0;display:flex;align-items:center;gap:8px}
+  .agent-step.done{color:#4ade80}
+  .section-card{background:#0f172a;border:1px solid #334155;border-radius:8px;padding:16px;margin-bottom:12px}
+  .section-card h3{font-size:.95rem;font-weight:700;color:#f59e0b;margin-bottom:10px;display:flex;justify-content:space-between}
+  .section-card p{font-size:.88rem;line-height:1.7;white-space:pre-wrap}
+  .page-pills{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  .page-pill{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:2px 10px;font-size:.75rem;color:#f59e0b}
+  .badge{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:#d97706;font-size:.7rem;font-weight:700}
+  .spinner{display:inline-block;width:14px;height:14px;border:2px solid #334155;border-top-color:#f59e0b;border-radius:50%;animation:spin .7s linear infinite;margin-right:6px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .chat-section{display:none}
+  .chat-section.active{display:block}
+  .chat-log{max-height:360px;overflow-y:auto;margin-bottom:14px;display:flex;flex-direction:column;gap:10px}
+  .chat-msg{padding:10px 14px;border-radius:10px;font-size:.86rem;line-height:1.5;max-width:85%}
+  .chat-msg.user{background:#d97706;color:#fff;align-self:flex-end}
+  .chat-msg.bot{background:#0f172a;border:1px solid #334155;color:#cbd5e1;align-self:flex-start}
+  .chat-msg .chat-pages{font-size:.72rem;color:#f59e0b;margin-top:6px}
+  .chat-input-row{display:flex;gap:8px}
+  .chat-input{flex:1;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:10px 12px;color:#e2e8f0;font-size:.88rem}
+  .chat-input:focus{outline:none;border-color:#f59e0b}
+  .chip-row{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:12px}
+  .chip{background:#0f172a;border:1px solid #334155;border-radius:20px;padding:5px 13px;font-size:.75rem;color:#94a3b8;cursor:pointer;transition:all .15s}
+  .chip:hover{border-color:#f59e0b;color:#f59e0b}
+  .chip-group-label{font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#475569;width:100%;margin-top:4px;margin-bottom:2px}
+  .scenario-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px;margin-top:4px}
+  .scenario-card{background:#0f172a;border:1px solid #334155;border-radius:8px;padding:12px 14px}
+  .scenario-label{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px}
+  .scenario-label.green{color:#4ade80}.scenario-label.yellow{color:#fbbf24}.scenario-label.red{color:#f87171}.scenario-label.blue{color:#60a5fa}
+  .scenario-title{font-size:.85rem;font-weight:600;color:#e2e8f0;margin-bottom:4px}
+  .scenario-desc{font-size:.75rem;color:#64748b;line-height:1.45}
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+<body>
+<h1>PDF Report Summarizer Agent</h1>
+<p class="subtitle">Upload a PDF → agent runs multiple retrieval passes → structured report with page citations.</p>
+
+<div class="card">
+  <h2><span class="badge">1</span> Upload your PDF</h2>
+  <div class="upload-area" id="dropZone">
+    <label for="pdfInput">
+      <div style="font-size:2rem">📄</div>
+      <div style="margin-top:8px;font-weight:600">Drop PDF here or click to browse</div>
+      <input type="file" id="pdfInput" accept=".pdf"/>
+    </label>
+  </div>
+  <div class="status" id="uploadStatus"></div>
+</div>
+
+<div class="card report-section" id="reportSection">
+  <h2><span class="badge">2</span> Generate Report</h2>
+  <button class="btn" id="genBtn" onclick="generateReport()">▶ Run Agent</button>
+  <div class="agent-log" id="agentLog" style="margin-top:16px;display:none"></div>
+  <div id="reportOutput"></div>
+  <button class="dl-btn" id="dlBtn" onclick="downloadReport()">⬇ Download Report</button>
+</div>
+
+<div class="card chat-section" id="chatSection">
+  <h2><span class="badge">3</span> Ask About This Document</h2>
+  <div class="chip-row">
+    <span class="chip-group-label">Report questions</span>
+    <span class="chip" onclick="fillChat4(this)">What is the executive summary?</span>
+    <span class="chip" onclick="fillChat4(this)">What are the key recommendations?</span>
+    <span class="chip" onclick="fillChat4(this)">What risks or challenges are identified?</span>
+    <span class="chip-group-label">Deep-dive questions</span>
+    <span class="chip" onclick="fillChat4(this)">What data or statistics are cited in the report?</span>
+    <span class="chip" onclick="fillChat4(this)">What themes run across all sections?</span>
+    <span class="chip-group-label">Out-of-scope (expect "not covered" answer)</span>
+    <span class="chip" onclick="fillChat4(this)">What will happen next year?</span>
+    <span class="chip" onclick="fillChat4(this)">What does the competitor think about this?</span>
+  </div>
+  <div class="chat-log" id="chatLog"></div>
+  <div class="chat-input-row">
+    <input type="text" class="chat-input" id="chatInput" placeholder="Ask anything about the document or report…" onkeydown="if(event.key==='Enter')sendChat()"/>
+    <button class="btn" id="chatSendBtn" onclick="sendChat()">Ask</button>
+  </div>
+</div>
+
+<div class="card">
+  <h2><span class="badge">4</span> QA Test Scenarios</h2>
+  <div class="scenario-grid">
+    <div class="scenario-card">
+      <div class="scenario-label green">Happy Path</div>
+      <div class="scenario-title">Full Report Generation</div>
+      <div class="scenario-desc">Upload a PDF and run the agent. Expect: 5 sections (Executive Summary, Key Themes, Data & Statistics, Recommendations, Risks). Each with page citations.</div>
+    </div>
+    <div class="scenario-card">
+      <div class="scenario-label blue">Agent Transparency</div>
+      <div class="scenario-title">Verify Tool Call Steps</div>
+      <div class="scenario-desc">Check the agent step log after generation. Expect: a mix of retrieve_content and write_section calls — shows the agent's reasoning process.</div>
+    </div>
+    <div class="scenario-card">
+      <div class="scenario-label green">Chat — In-Report</div>
+      <div class="scenario-title">Ask About a Section</div>
+      <div class="scenario-desc">After generating, ask "What are the key recommendations?" Expect: answer grounded in the report's Recommendations section with page numbers.</div>
+    </div>
+    <div class="scenario-card">
+      <div class="scenario-label yellow">Chat — Follow-Up</div>
+      <div class="scenario-title">Multi-Turn Memory</div>
+      <div class="scenario-desc">Ask two related questions in sequence. Expect: the second answer references or builds on the first, showing conversation memory works.</div>
+    </div>
+    <div class="scenario-card">
+      <div class="scenario-label red">Out-of-Scope</div>
+      <div class="scenario-title">Ask About Missing Info</div>
+      <div class="scenario-desc">Ask "What does the competitor think about this?" Expect: honest "not covered in the document" reply, not a hallucinated answer.</div>
+    </div>
+    <div class="scenario-card">
+      <div class="scenario-label yellow">Re-run</div>
+      <div class="scenario-title">Generate Report Twice</div>
+      <div class="scenario-desc">Click Run Agent a second time on the same document. Expect: new report replaces old one, chat history resets. Tests idempotent behaviour.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const pdfInput=document.getElementById('pdfInput');
+const uploadStatus=document.getElementById('uploadStatus');
+const reportSection=document.getElementById('reportSection');
+const agentLog=document.getElementById('agentLog');
+const reportOutput=document.getElementById('reportOutput');
+const genBtn=document.getElementById('genBtn');
+const dlBtn=document.getElementById('dlBtn');
+let _lastReport=null;
+let _docName='';
+
+const dropZone=document.getElementById('dropZone');
+['dragenter','dragover'].forEach(e=>dropZone.addEventListener(e,ev=>{ev.preventDefault();dropZone.style.borderColor='#f59e0b'}));
+['dragleave','drop'].forEach(e=>dropZone.addEventListener(e,ev=>{ev.preventDefault();dropZone.style.borderColor='#334155'}));
+dropZone.addEventListener('drop',ev=>{const f=ev.dataTransfer.files[0];if(f)uploadFile(f)});
+pdfInput.addEventListener('change',()=>{if(pdfInput.files[0])uploadFile(pdfInput.files[0])});
+
+async function uploadFile(file){
+  if(file.size>50*1024*1024){uploadStatus.className='status err';uploadStatus.textContent='✗ File too large ('+(file.size/1024/1024).toFixed(1)+' MB). Maximum is 50 MB.';return;}
+  uploadStatus.className='status';
+  uploadStatus.textContent='Processing…';
+  const fd=new FormData(); fd.append('file',file);
+  try{
+    const r=await fetch('/upload',{method:'POST',body:fd});
+    const d=await r.json();
+    if(!r.ok) throw new Error(d.detail||'Upload failed');
+    uploadStatus.className='status ok';
+    uploadStatus.textContent=`✓ "${d.filename}" — ${d.chunks} chunks ready.`;
+    _docName=d.filename;
+    reportSection.classList.add('active');
+    dlBtn.style.display='none';
+    document.getElementById('chatSection').classList.add('active');
+    document.getElementById('chatLog').innerHTML='';
+  }catch(e){
+    uploadStatus.className='status err';
+    uploadStatus.textContent='✗ '+e.message;
+  }
+}
+
+function downloadReport(){
+  if(!_lastReport) return;
+  const {jsPDF}=window.jspdf;
+  const doc=new jsPDF();
+  const W=170,ml=20;
+  let y=20;
+  const nl=(n=6)=>{y+=n;};
+  const addLine=(text,size=11,style='normal',color=[30,30,30])=>{
+    doc.setFontSize(size);doc.setFont('helvetica',style);doc.setTextColor(...color);
+    const lines=doc.splitTextToSize(String(text),W);
+    if(y+lines.length*size*0.4>280){doc.addPage();y=20;}
+    doc.text(lines,ml,y);y+=lines.length*(size*0.45);
+  };
+  addLine('PDF Report — Summarizer Agent',16,'bold',[217,119,6]);
+  nl(2);
+  addLine('Generated: '+new Date().toLocaleString(),9,'normal',[120,120,120]);
+  addLine('Document:  '+_docName,9,'normal',[120,120,120]);
+  nl(4);
+  doc.setDrawColor(200,200,200);doc.line(ml,y,ml+W,y);nl(8);
+  for(const[,sec] of Object.entries(_lastReport)){
+    addLine(sec.label,13,'bold',[217,119,6]);
+    nl(3);
+    addLine(sec.content,10);
+    if(sec.pages&&sec.pages.length){nl(3);addLine('Pages cited: '+sec.pages.join(', '),9,'normal',[120,120,120]);}
+    nl(6);
+    doc.setDrawColor(230,230,230);doc.line(ml,y,ml+W,y);nl(8);
+  }
+  const ts=new Date().toISOString().replace(/[:.]/g,'-');
+  doc.save('report_'+ts+'.pdf');
+}
+
+async function generateReport(){
+  genBtn.disabled=true;
+  dlBtn.style.display='none';
+  agentLog.style.display='block';
+  agentLog.innerHTML='<div class="agent-step"><span class="spinner"></span>Agent retrieving content and writing sections…</div>';
+  reportOutput.innerHTML='';
+
+  try{
+    const r=await fetch('/generate-report',{method:'POST'});
+    const d=await r.json();
+    if(!r.ok) throw new Error(d.detail||'Agent failed');
+
+    // Show step log
+    agentLog.innerHTML='';
+    (d.steps||[]).forEach(s=>{
+      const div=document.createElement('div');
+      div.className='agent-step done';
+      div.textContent='✓ '+s.tool+': '+(s.section||'');
+      agentLog.appendChild(div);
+    });
+
+    renderReport(d.report, d.filename);
+    _lastReport=d.report;
+    dlBtn.style.display='inline-block';
+  }catch(e){
+    agentLog.innerHTML='<div class="agent-step" style="color:#f87171">✗ '+e.message+'</div>';
+  }finally{
+    genBtn.disabled=false;
+  }
+}
+
+function renderReport(report, filename){
+  let html=`<div style="margin-bottom:16px;font-size:.85rem;color:#64748b">Report from: <strong style="color:#e2e8f0">${filename}</strong></div>`;
+  for(const[key,sec] of Object.entries(report)){
+    const pills=sec.pages.map(p=>`<div class="page-pill">p.${p}</div>`).join('');
+    html+=`<div class="section-card">
+      <h3>${sec.label} <span style="font-size:.75rem;font-weight:400;color:#64748b">${sec.pages.length?'pages cited':'no pages'}</span></h3>
+      <p>${escHtml(sec.content)}</p>
+      ${sec.pages.length?`<div class="page-pills">${pills}</div>`:''}
+    </div>`;
+  }
+  reportOutput.innerHTML=html;
+}
+
+function escHtml(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function fillChat4(el){document.getElementById('chatInput').value=el.textContent.trim();document.getElementById('chatInput').focus();}
+
+async function sendChat(){
+  const input=document.getElementById('chatInput');
+  const q=input.value.trim();
+  if(!q)return;
+  const log=document.getElementById('chatLog');
+  const sendBtn=document.getElementById('chatSendBtn');
+  log.innerHTML+=`<div class="chat-msg user">${escHtml(q)}</div>`;
+  log.scrollTop=log.scrollHeight;
+  input.value='';
+  sendBtn.disabled=true;
+  const thinkingId='thinking-'+Date.now();
+  log.innerHTML+=`<div class="chat-msg bot" id="${thinkingId}">⏳ Thinking…</div>`;
+  log.scrollTop=log.scrollHeight;
+  try{
+    const r=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q})});
+    const d=await r.json();
+    const el=document.getElementById(thinkingId);
+    if(!r.ok)throw new Error(d.detail||'Error');
+    el.innerHTML=escHtml(d.answer)+(d.pages&&d.pages.length?`<div class="chat-pages">📄 Pages: ${d.pages.join(', ')}</div>`:'');
+  }catch(e){
+    document.getElementById(thinkingId).innerHTML='✗ '+escHtml(e.message);
+  }finally{
+    sendBtn.disabled=false;
+    log.scrollTop=log.scrollHeight;
+  }
+}
+</script>
+
+<!-- ══ QA Run History (localStorage, per-browser) ══ -->
+<script>
+(function(){
+  var KEY='qa_hist_app4', MAX=20, TRACK=["/generate-report", "/chat"], ACCENT='#f59e0b';
+  function load(){try{var v=JSON.parse(localStorage.getItem(KEY));return Array.isArray(v)?v:[]}catch(e){return[]}}
+  function save(l){try{localStorage.setItem(KEY,JSON.stringify(l.slice(0,MAX)))}catch(e){}}
+  function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+  function summarize(d){
+    if(!d||typeof d!=='object')return'';
+    if(d.decision)return'Decision: '+d.decision;
+    if(d.answer)return String(d.answer);
+    if(d.report)return'Report generated ('+Object.keys(d.report).length+' sections)';
+    if(d.faqs)return(d.faqs.length||0)+' FAQs generated';
+    if(d.results)return(d.results.length||0)+' candidate(s) screened';
+    if(d.summary)return String(d.summary);
+    if(d.changes)return(Array.isArray(d.changes)?d.changes.length+' change(s) found':String(d.changes));
+    return JSON.stringify(d).slice(0,140);
+  }
+  function inputOf(opts){
+    try{
+      if(!opts||!opts.body)return'';
+      if(typeof opts.body==='string'){
+        var j=JSON.parse(opts.body);
+        return j.ticket||j.question||j.count&&('count='+j.count)||JSON.stringify(j);
+      }
+      if(opts.body instanceof FormData)return'[file upload]';
+    }catch(e){}
+    return'';
+  }
+  var origFetch=window.fetch;
+  window.fetch=function(url,opts){
+    var p=origFetch.apply(this,arguments);
+    try{
+      var path=(typeof url==='string'?url:(url&&url.url)||'').split('?')[0];
+      var hit=TRACK.some(function(t){return path===t||path.endsWith(t)});
+      if(hit){
+        p.then(function(r){
+          if(!r.ok)return;
+          r.clone().json().then(function(data){
+            var l=load();
+            l.unshift({t:Date.now(),ep:path.replace(/^.*\//,'/'),inp:String(inputOf(opts)).slice(0,140),res:String(summarize(data)).slice(0,180)});
+            save(l);render();
+          }).catch(function(){});
+        }).catch(function(){});
+      }
+    }catch(e){}
+    return p;
+  };
+  function fmtTime(t){
+    var d=new Date(t);
+    return d.toLocaleDateString()+' '+d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+  }
+  var host=null;
+  function ensurePanel(){
+    if(host)return;
+    host=document.createElement('div');
+    host.innerHTML=
+      '<div id="qaHistCard" style="background:#1e293b;border:1px solid #334155;border-radius:12px;padding:24px;width:100%;max-width:800px;margin:0 auto 20px;font-family:inherit">'+
+      '<div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer" id="qaHistHead">'+
+      '<h2 style="font-size:1rem;font-weight:600;color:#cbd5e1;display:flex;align-items:center;gap:8px;margin:0">'+
+      '<span style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:'+ACCENT+'22;border:1px solid '+ACCENT+'55;font-size:.75rem">🕘</span>'+
+      'Recent Runs <span style="font-size:.7rem;color:#64748b;font-weight:400">(this browser only)</span></h2>'+
+      '<span style="display:flex;gap:10px;align-items:center">'+
+      '<button id="qaHistClear" style="background:none;border:1px solid #334155;color:#94a3b8;border-radius:6px;padding:4px 10px;font-size:.72rem;cursor:pointer">Clear</button>'+
+      '<span id="qaHistToggle" style="color:#64748b;font-size:.8rem">▾</span></span></div>'+
+      '<div id="qaHistBody" style="margin-top:14px"></div></div>';
+    document.body.appendChild(host.firstChild);
+    host=document.getElementById('qaHistCard');
+    document.getElementById('qaHistClear').addEventListener('click',function(ev){
+      ev.stopPropagation();
+      if(confirm('Clear run history for this app in this browser?')){try{localStorage.removeItem(KEY)}catch(e){}render();}
+    });
+    document.getElementById('qaHistHead').addEventListener('click',function(){
+      var b=document.getElementById('qaHistBody');
+      var open=b.style.display!=='none';
+      b.style.display=open?'none':'block';
+      document.getElementById('qaHistToggle').textContent=open?'▸':'▾';
+    });
+  }
+  function render(){
+    ensurePanel();
+    var l=load(),b=document.getElementById('qaHistBody');
+    if(!l.length){b.innerHTML='<div style="font-size:.8rem;color:#475569">No runs yet. Results of your test runs will appear here and survive page refresh and server restarts.</div>';return;}
+    b.innerHTML=l.map(function(e){
+      return '<div style="background:#0f172a;border:1px solid #1e293b;border-radius:8px;padding:10px 14px;margin-bottom:8px">'+
+        '<div style="display:flex;justify-content:space-between;gap:10px;margin-bottom:4px">'+
+        '<span style="font-size:.72rem;font-weight:700;color:'+ACCENT+'">'+esc(e.ep)+'</span>'+
+        '<span style="font-size:.68rem;color:#475569">'+esc(fmtTime(e.t))+'</span></div>'+
+        (e.inp?'<div style="font-size:.76rem;color:#94a3b8;margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">IN: '+esc(e.inp)+'</div>':'')+
+        (e.res?'<div style="font-size:.76rem;color:#cbd5e1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">OUT: '+esc(e.res)+'</div>':'')+
+        '</div>';
+    }).join('');
+  }
+  if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',render);}else{render();}
+})();
+</script>
+
+</body>
+</html>

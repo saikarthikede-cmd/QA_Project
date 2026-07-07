@@ -1,0 +1,42 @@
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+logs/*.log
+logs/*.log.err
+*.log
+
+# Test / local outputs
+test_pdfs/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# opencode local config
+opencode.json
