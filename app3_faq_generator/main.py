@@ -9,7 +9,7 @@ from typing import List, Optional
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dotenv import load_dotenv
-load_dotenv(Path(__file__).parent.parent / ".env")
+load_dotenv(Path(__file__).parent / ".env")
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from groq import Groq
 from pydantic import BaseModel
 
+from shared.errors import raise_for_groq_error
 from shared.pdf_utils import build_context, chunk_pages, embed_chunks, extract_pages, retrieve
 
 app = FastAPI(title="App 3 – FAQ Generator")
@@ -152,10 +153,7 @@ def _safe_build_faqs(avoid_questions: Optional[List[str]] = None) -> List[dict]:
     try:
         return _build_faqs(avoid_questions)
     except Exception as e:
-        if type(e).__name__ == "RateLimitError":
-            raise HTTPException(429, "Rate limit reached on the AI provider. Please wait about 10 seconds and try again.")
-        import traceback
-        raise HTTPException(500, f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
+        raise_for_groq_error(e)
 
 
 @app.post("/generate")
@@ -188,8 +186,9 @@ def regenerate_one(body: RegenerateRequest):
         raise HTTPException(400, f"Invalid index {idx}.")
     avoid = [f["question"] for i, f in enumerate(_state["faqs"]) if i != idx]
     new_faqs = _safe_build_faqs(avoid_questions=avoid)
-    if new_faqs:
-        _state["faqs"][idx] = new_faqs[0]
+    if not new_faqs:
+        raise HTTPException(502, "The AI could not generate a replacement question. Please retry.")
+    _state["faqs"][idx] = new_faqs[0]
     return {"faq": _state["faqs"][idx], "index": idx}
 
 
@@ -228,10 +227,7 @@ def ask(body: AskRequest):
     try:
         response = _ask_groq(prompt)
     except Exception as e:
-        if type(e).__name__ == "RateLimitError":
-            raise HTTPException(429, "Rate limit reached on the AI provider. Please wait about 10 seconds and try again.")
-        import traceback
-        raise HTTPException(500, f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
+        raise_for_groq_error(e)
     pages = sorted({r.chunk.page for r in results})
     return {"answer": response.choices[0].message.content.strip(), "pages": pages}
 

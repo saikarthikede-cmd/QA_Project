@@ -1,5 +1,5 @@
 """Portal – unified dashboard for all 6 AI QA-suite apps."""
-import os, sys
+import asyncio, os, sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -33,17 +33,19 @@ def index():
     )
 
 
+async def _check(client: httpx.AsyncClient, a: dict) -> tuple[str, str]:
+    try:
+        r = await client.get(f"http://127.0.0.1:{a['port']}/")
+        return a["id"], ("up" if r.status_code < 500 else "error")
+    except Exception:
+        return a["id"], "down"
+
+
 @app.get("/api/status")
 async def status():
-    results = {}
     async with httpx.AsyncClient(timeout=5.0) as client:
-        for a in APPS:
-            try:
-                r = await client.get(f"http://127.0.0.1:{a['port']}/")
-                results[a["id"]] = "up" if r.status_code < 500 else "error"
-            except Exception:
-                results[a["id"]] = "down"
-    return JSONResponse(results, headers={"Cache-Control": "no-store"})
+        checks = await asyncio.gather(*(_check(client, a) for a in APPS))
+    return JSONResponse(dict(checks), headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/apps")

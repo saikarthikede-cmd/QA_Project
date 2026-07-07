@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dotenv import load_dotenv
-load_dotenv(Path(__file__).parent.parent / ".env")
+load_dotenv(Path(__file__).parent / ".env")
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -18,6 +18,7 @@ from groq import Groq
 from pydantic import BaseModel
 from typing import List
 
+from shared.errors import raise_for_groq_error
 from shared.pdf_utils import build_context, chunk_pages, embed_chunks, extract_pages, retrieve
 
 app = FastAPI(title="App 1 – Resume Screener (RAG)")
@@ -126,6 +127,9 @@ def remove_resume(filename: str):
     if filename not in _state["resumes"]:
         raise HTTPException(404, "Resume not found.")
     del _state["resumes"][filename]
+    # Prior screening results/chat may reference the removed candidate — clear them.
+    _state["last_results"] = []
+    _state["chat_history"] = []
     return {"status": "removed", "remaining": len(_state["resumes"])}
 
 
@@ -137,13 +141,8 @@ def screen():
         raise HTTPException(400, "No resumes uploaded.")
     try:
         return _run_screen()
-    except HTTPException:
-        raise
     except Exception as e:
-        if type(e).__name__ == "RateLimitError":
-            raise HTTPException(429, "Rate limit reached on the AI provider. Please wait about 10 seconds and try again.")
-        import traceback
-        raise HTTPException(500, f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
+        raise_for_groq_error(e)
 
 
 def _run_screen():
@@ -281,10 +280,7 @@ def ask(body: AskRequest):
             temperature=0,
         )
     except Exception as e:
-        if type(e).__name__ == "RateLimitError":
-            raise HTTPException(429, "Rate limit reached on the AI provider. Please wait about 10 seconds and try again.")
-        import traceback
-        raise HTTPException(500, f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
+        raise_for_groq_error(e)
 
     answer = response.choices[0].message.content.strip()
     pages = sorted({r.chunk.page for r in results})

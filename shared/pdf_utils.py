@@ -81,6 +81,8 @@ def chunk_pages(
     overlap: int = CHUNK_OVERLAP,
 ) -> List[Chunk]:
     """Slide a window over each page's text, tagging each chunk with its page number."""
+    if overlap >= chunk_size:
+        raise ValueError(f"overlap ({overlap}) must be smaller than chunk_size ({chunk_size})")
     chunks: List[Chunk] = []
     for page_num, text in pages:
         if not text:
@@ -108,8 +110,13 @@ def embed_chunks(chunks: List[Chunk]) -> List[Chunk]:
 
 
 def embed_query(query: str) -> np.ndarray:
+    return embed_queries([query])[0]
+
+
+def embed_queries(queries: List[str]) -> np.ndarray:
+    """Batch-encode multiple queries in a single model call."""
     model = get_model()
-    return model.encode([query], show_progress_bar=False, convert_to_numpy=True)[0]
+    return model.encode(queries, show_progress_bar=False, convert_to_numpy=True)
 
 
 # ---------------------------------------------------------------------------
@@ -131,9 +138,18 @@ def retrieve(
 ) -> List[RetrievedChunk]:
     if not chunks:
         return []
-    q_emb = embed_query(query)
+    return retrieve_with_embedding(embed_query(query), chunks, top_k)
+
+
+def retrieve_with_embedding(
+    query_embedding: np.ndarray,
+    chunks: List[Chunk],
+    top_k: int = TOP_K,
+) -> List[RetrievedChunk]:
+    """Same as retrieve(), but for a query already embedded (batch-encode many
+    queries once with embed_queries() and reuse each vector across calls)."""
     scored = [
-        RetrievedChunk(chunk=c, score=cosine_similarity(q_emb, c.embedding))
+        RetrievedChunk(chunk=c, score=cosine_similarity(query_embedding, c.embedding))
         for c in chunks
         if c.embedding is not None
     ]

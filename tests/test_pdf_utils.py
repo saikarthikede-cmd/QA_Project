@@ -83,3 +83,11 @@ def test_safe_exec_forbids_dunder_tricks():
     code = "print(().__class__.__bases__[0].__subclasses__())"
     result = run_sandboxed_python(code)
     assert result.startswith("ERROR:")
+
+
+def test_safe_exec_forbids_format_string_escape():
+    # .format() does attribute/index traversal inside a string literal,
+    # bypassing an AST walk that only looks for real Attribute nodes.
+    code = "print('{0.__class__.__bases__}'.format(1))"
+    result = run_sandboxed_python(code)
+    assert result.startswith("ERROR:")

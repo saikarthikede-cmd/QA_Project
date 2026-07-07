@@ -74,6 +74,12 @@ _FORBIDDEN_ATTRIBUTES = {
     "__closure__",
     "__dict__",
     "__import__",
+    # str.format()'s mini-language does attribute/index traversal (e.g.
+    # "{0.__class__.__base__.__subclasses__()}".format(x)) entirely inside a
+    # string literal, so the AST walk above never sees it as an Attribute
+    # node. Blocking the method call is simpler than parsing format specs.
+    "format",
+    "__format__",
 }
 
 
@@ -95,11 +101,8 @@ def _validate_ast(node: ast.AST) -> None:
                 raise ValueError(f"Forbidden attribute access: {child.attr}")
 
 
-class _NoImport:
-    """Replacement for __import__ that always fails."""
-
-    def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        raise RuntimeError("Imports are not allowed in sandboxed code.")
+def _no_import(*args: Any, **kwargs: Any) -> Any:
+    raise RuntimeError("Imports are not allowed in sandboxed code.")
 
 
 def run_sandboxed_python(code: str) -> str:
@@ -118,7 +121,7 @@ def run_sandboxed_python(code: str) -> str:
         return f"ERROR:\nSecurityError: {e}"
 
     restricted_globals: Dict[str, Any] = {
-        "__builtins__": {**_ALLOWED_BUILTINS, "__import__": _NoImport()},
+        "__builtins__": {**_ALLOWED_BUILTINS, "__import__": _no_import},
         "math": math,
     }
 

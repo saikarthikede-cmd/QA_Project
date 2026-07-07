@@ -1,6 +1,7 @@
-﻿"""App 4 â€“ PDF Report Summarizer Agent  [AGENTIC]
-Agent uses tool calls to decide what to retrieve and what sections to write.
-Streams its tool-call steps as SSE events so the UI shows live progress.
+﻿"""App 4 – PDF Report Summarizer Agent  [AGENTIC]
+Agent uses tool calls to decide what to retrieve (retrieve_content) and what
+sections to write (write_section), one section at a time, grounded in its own
+retrieval rather than a single upfront completion.
 """
 import os, sys, json, re
 from pathlib import Path
@@ -8,17 +9,18 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dotenv import load_dotenv
-load_dotenv(Path(__file__).parent.parent / ".env")
+load_dotenv(Path(__file__).parent / ".env")
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from groq import Groq
+from groq import BadRequestError, Groq
 from pydantic import BaseModel
 
+from shared.errors import raise_for_groq_error
 from shared.pdf_utils import build_context, chunk_pages, embed_chunks, extract_pages, retrieve
 
-app = FastAPI(title="App 4 â€“ Report Summarizer Agent")
+app = FastAPI(title="App 4 – Report Summarizer Agent")
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 client = Groq(api_key=os.environ["GROQ_API_KEY"])
 
@@ -145,24 +147,7 @@ def generate_report():
     try:
         return _run_agent()
     except Exception as e:
-        if type(e).__name__ == "RateLimitError":
-            raise HTTPException(429, "Rate limit reached on the AI provider. Please wait about 10 seconds and try again.")
-        import traceback
-        raise HTTPException(500, f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
-
-
-@app.get("/generate-report")
-def generate_report_stream():
-    """Compatibility SSE endpoint documented by the app README and used by tests."""
-    if not _state["chunks"]:
-        raise HTTPException(400, "No PDF uploaded yet.")
-
-    def events():
-        yield "event: step\ndata: Starting report generation\n\n"
-        payload = _run_agent()
-        yield f"event: done\ndata: {json.dumps(payload)}\n\n"
-
-    return StreamingResponse(events(), media_type="text/event-stream")
+        raise_for_groq_error(e)
 
 
 REPORT_SECTIONS = [
@@ -198,44 +183,101 @@ def _parse_report_json(content: str) -> dict:
         return {}
 
 
+AGENT_SYSTEM_PROMPT_TEMPLATE = (
+    "You are a report writing agent working on the document '{filename}'.\n"
+    "You have two tools: retrieve_content(query, section) to search the PDF for evidence, "
+    "and write_section(title, content, pages) to submit a completed section.\n"
+    "Produce exactly five sections, in this order: Executive Summary, Key Themes, "
+    "Data & Statistics, Recommendations, Risks & Challenges.\n"
+    "For each section: call retrieve_content at least once to gather evidence for it, then call "
+    "write_section exactly once with content grounded ONLY in retrieved evidence and page citations.\n"
+    "Do not invent facts that aren't in the retrieved evidence — if evidence is limited, summarize "
+    "what's present instead.\n"
+    "Call write_section for all five sections before you finish."
+)
+
+MAX_TOOL_CALLS_PER_TURN = 3
+MAX_TOTAL_TOOL_CALLS = 20  # 5 sections x (>=1 retrieve + 1 write), with slack
+
+
 def _run_agent():
-    evidence = _build_report_evidence()
+    messages = [{"role": "user", "content": AGENT_SYSTEM_PROMPT_TEMPLATE.format(filename=_state["filename"])}]
     report_sections: dict = {}
-    steps = [{"tool": "retrieve_content", "section": title} for _, title, _ in REPORT_SECTIONS]
+    steps = []
+    total_tool_calls = 0
 
-    prompt = (
-        f"You are a report writing agent. Document: '{_state['filename']}'.\n"
-        "Write a grounded report using ONLY the retrieved PDF evidence below.\n"
-        "Create exactly five sections: Executive Summary, Key Themes, Data & Statistics, Recommendations, Risks & Challenges.\n"
-        "Each section must cite page numbers from its evidence in the pages array and in the content text.\n"
-        "If evidence is limited, summarize what is present instead of inventing missing facts.\n\n"
-        f"RETRIEVED EVIDENCE BY SECTION:\n{evidence}\n\n"
-        "Return ONLY raw JSON in this exact shape:\n"
-        '{"report":{"executive_summary":{"label":"Executive Summary","content":"...","pages":[1]},'
-        '"key_themes":{"label":"Key Themes","content":"...","pages":[1]},'
-        '"data_statistics":{"label":"Data & Statistics","content":"...","pages":[1]},'
-        '"recommendations":{"label":"Recommendations","content":"...","pages":[1]},'
-        '"risks_challenges":{"label":"Risks & Challenges","content":"...","pages":[1]}}}'
-    )
-
-    response = client.chat.completions.create(
-        model=MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0,
-        response_format={"type": "json_object"},
-    )
-    msg = response.choices[0].message
-
-    for tc in msg.tool_calls or []:
+    for _ in range(15):
+        if total_tool_calls >= MAX_TOTAL_TOOL_CALLS:
+            break
         try:
-            fn_args = json.loads(tc.function.arguments)
-        except Exception:
-            continue
-        run_tool(tc.function.name, fn_args, report_sections)
-        steps.append({"tool": tc.function.name, "section": fn_args.get("section", fn_args.get("title", ""))})
+            response = client.chat.completions.create(
+                model=MODEL,
+                messages=messages,
+                tools=TOOLS,
+                tool_choice="auto",
+                temperature=0,
+            )
+        except BadRequestError:
+            break
+        msg = response.choices[0].message
+        tool_calls = (msg.tool_calls or [])[:MAX_TOOL_CALLS_PER_TURN]
+
+        msg_dict = {"role": "assistant", "content": msg.content}
+        if tool_calls:
+            msg_dict["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                }
+                for tc in tool_calls
+            ]
+        messages.append(msg_dict)
+
+        if not tool_calls:
+            break
+
+        for tc in tool_calls:
+            try:
+                fn_args = json.loads(tc.function.arguments)
+            except Exception:
+                messages.append({"role": "tool", "tool_call_id": tc.id,
+                                  "content": "ERROR: malformed tool arguments — retry with valid JSON."})
+                continue
+            result = run_tool(tc.function.name, fn_args, report_sections)
+            total_tool_calls += 1
+            steps.append({"tool": tc.function.name, "section": fn_args.get("section", fn_args.get("title", ""))})
+            messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
+
+        if len(report_sections) >= len(REPORT_SECTIONS):
+            break
 
     if not report_sections:
-        parsed = _parse_report_json(msg.content or "")
+        # The model never engaged with the tools (or hit BadRequestError immediately) —
+        # fall back to a single grounded completion over upfront-retrieved evidence
+        # rather than showing nothing.
+        evidence = _build_report_evidence()
+        fallback_prompt = (
+            f"You are a report writing agent. Document: '{_state['filename']}'.\n"
+            "Write a grounded report using ONLY the retrieved PDF evidence below.\n"
+            "Create exactly five sections: Executive Summary, Key Themes, Data & Statistics, Recommendations, Risks & Challenges.\n"
+            "Each section must cite page numbers from its evidence in the pages array and in the content text.\n"
+            "If evidence is limited, summarize what is present instead of inventing missing facts.\n\n"
+            f"RETRIEVED EVIDENCE BY SECTION:\n{evidence}\n\n"
+            "Return ONLY raw JSON in this exact shape:\n"
+            '{"report":{"executive_summary":{"label":"Executive Summary","content":"...","pages":[1]},'
+            '"key_themes":{"label":"Key Themes","content":"...","pages":[1]},'
+            '"data_statistics":{"label":"Data & Statistics","content":"...","pages":[1]},'
+            '"recommendations":{"label":"Recommendations","content":"...","pages":[1]},'
+            '"risks_challenges":{"label":"Risks & Challenges","content":"...","pages":[1]}}}'
+        )
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=[{"role": "user", "content": fallback_prompt}],
+            temperature=0,
+            response_format={"type": "json_object"},
+        )
+        parsed = _parse_report_json(response.choices[0].message.content or "")
         report_sections = parsed.get("report", {}) if isinstance(parsed, dict) else {}
         for section in report_sections.values():
             steps.append({"tool": "write_section", "section": section.get("label", "")})
@@ -284,10 +326,7 @@ def chat(body: ChatRequest):
             temperature=0,
         )
     except Exception as e:
-        if type(e).__name__ == "RateLimitError":
-            raise HTTPException(429, "Rate limit reached on the AI provider. Please wait about 10 seconds and try again.")
-        import traceback
-        raise HTTPException(500, f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
+        raise_for_groq_error(e)
     answer = response.choices[0].message.content.strip()
     pages = sorted({r.chunk.page for r in results})
 

@@ -3,21 +3,23 @@ Embeds both documents as chunks.
 Cross-retrieves corresponding sections from each document using topic queries,
 then generates a diff grounded in retrieved paired evidence with page citations.
 """
-import os, sys, json, re
+import io, os, sys, json, re
 from pathlib import Path
 from typing import List
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dotenv import load_dotenv
-load_dotenv(Path(__file__).parent.parent / ".env")
+load_dotenv(Path(__file__).parent / ".env")
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from groq import Groq
+from pypdf import PdfReader
 
-from shared.pdf_utils import chunk_pages, embed_chunks, extract_pages, retrieve
+from shared.errors import raise_for_groq_error
+from shared.pdf_utils import chunk_pages, embed_chunks, embed_queries, extract_pages, retrieve_with_embedding
 
 app = FastAPI(title="App 2 – Document Diff Analyzer (RAG)")
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
@@ -79,9 +81,7 @@ def _build_metadata(pdf_bytes: bytes, pages: list, chunks: list, filename: str) 
     total_words = sum(len(t.split()) for _, t in pages)
     reader_meta = {}
     try:
-        from pypdf import PdfReader
-        import io as _io
-        info = PdfReader(_io.BytesIO(pdf_bytes)).metadata or {}
+        info = PdfReader(io.BytesIO(pdf_bytes)).metadata or {}
         reader_meta = {
             "author": str(info.get("/Author", "") or ""),
             "title": str(info.get("/Title", "") or ""),
@@ -145,21 +145,19 @@ def analyze():
         raise HTTPException(400, "Document B not uploaded yet.")
     try:
         return _run_analyze()
-    except HTTPException:
-        raise
     except Exception as e:
-        if type(e).__name__ == "RateLimitError":
-            raise HTTPException(429, "Rate limit reached on the AI provider. Please wait about 10 seconds and try again.")
-        import traceback
-        raise HTTPException(500, f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
+        raise_for_groq_error(e)
 
 
 def _run_analyze():
-    # RAG: for each topic, retrieve corresponding sections from BOTH documents
+    # RAG: for each topic, retrieve corresponding sections from BOTH documents.
+    # Batch-encode all topic queries once instead of embedding each one twice
+    # (once per document) inside the loop.
+    topic_embeddings = embed_queries(COMPARISON_TOPICS)
     comparison_blocks: List[str] = []
-    for topic in COMPARISON_TOPICS:
-        from_a = retrieve(topic, _state["doc_a"]["chunks"], top_k=1)
-        from_b = retrieve(topic, _state["doc_b"]["chunks"], top_k=1)
+    for topic, topic_emb in zip(COMPARISON_TOPICS, topic_embeddings):
+        from_a = retrieve_with_embedding(topic_emb, _state["doc_a"]["chunks"], top_k=1)
+        from_b = retrieve_with_embedding(topic_emb, _state["doc_b"]["chunks"], top_k=1)
 
         # Only include topics where both docs have relevant content (score > threshold)
         if not from_a or not from_b:

@@ -2,20 +2,21 @@
 Upload a PDF with tables/numbers → ask data questions → agent extracts data,
 writes Python to compute, self-corrects on failure, returns result with page citation.
 """
-import os, sys, json, re
+import os, sys, json
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dotenv import load_dotenv
-load_dotenv(Path(__file__).parent.parent / ".env")
+load_dotenv(Path(__file__).parent / ".env")
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from groq import Groq
+from groq import BadRequestError, Groq
 from pydantic import BaseModel
 
+from shared.errors import raise_for_groq_error
 from shared.pdf_utils import build_context, chunk_pages, embed_chunks, extract_pages, retrieve
 from shared.safe_exec import run_sandboxed_python
 
@@ -23,7 +24,7 @@ app = FastAPI(title="App 6 – PDF Data Analyst")
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 client = Groq(api_key=os.environ["GROQ_API_KEY"])
 
-_state: dict = {"chunks": [], "filename": "", "history": [], "pages": [], "numeric_entries": []}
+_state: dict = {"chunks": [], "filename": "", "history": []}
 
 MAX_RETRIES = 3
 
@@ -93,122 +94,6 @@ def run_tool(name: str, args: dict) -> str:
     return "Unknown tool."
 
 
-def _money_to_float(raw: str) -> float:
-    return float(raw.replace("$", "").replace(",", ""))
-
-
-def _extract_numeric_entries(pages: list[tuple]) -> list[dict]:
-    entries: list[dict] = []
-    money_pattern = re.compile(r"\$[\d,]+(?:\.\d+)?")
-    number_pattern = re.compile(r"(?<![$\w])\d[\d,]*(?:\.\d+)?(?:%|x)?")
-
-    for page, text in pages:
-        for line in text.splitlines():
-            clean = " ".join(line.strip(" -").split())
-            if not clean:
-                continue
-
-            money_matches = money_pattern.findall(clean)
-            for raw in money_matches:
-                entries.append(
-                    {
-                        "label": clean,
-                        "raw": raw,
-                        "value": _money_to_float(raw),
-                        "unit": "usd",
-                        "page": page,
-                    }
-                )
-
-            # Keep non-currency numbers available for targeted questions, but
-            # avoid duplicating the numeric part of currency values.
-            without_money = money_pattern.sub("", clean)
-            for raw in number_pattern.findall(without_money):
-                normalized = raw.replace(",", "")
-                unit = "percent" if raw.endswith("%") else "multiple" if raw.endswith("x") else "number"
-                try:
-                    value = float(normalized.rstrip("%x"))
-                except ValueError:
-                    continue
-                entries.append(
-                    {
-                        "label": clean,
-                        "raw": raw,
-                        "value": value,
-                        "unit": unit,
-                        "page": page,
-                    }
-                )
-
-    return entries
-
-
-def _format_usd(value: float) -> str:
-    return f"${value:,.2f}".replace(".00", "")
-
-
-def _direct_numeric_answer(question: str) -> dict | None:
-    q = question.lower()
-    money_entries = [e for e in _state["numeric_entries"] if e["unit"] == "usd"]
-    if not money_entries:
-        return None
-
-    wants_all_sum = ("total" in q or "sum" in q) and ("all" in q or "figures" in q or "entries" in q)
-    wants_average = ("average" in q or "mean" in q) and ("all" in q or "entries" in q or "figures" in q or "value" in q)
-
-    if not wants_all_sum and not wants_average:
-        return None
-
-    values = [e["value"] for e in money_entries]
-    total = sum(values)
-    average = total / len(values)
-    pages = sorted({e["page"] for e in money_entries})
-    labels_preview = "\n".join(f"- p.{e['page']}: {e['label']}" for e in money_entries[:12])
-
-    code = (
-        f"values = {values!r}\n"
-        "total = sum(values)\n"
-        "average = total / len(values)\n"
-        "print(total)\n"
-        "print(average)\n"
-        "print(len(values))"
-    )
-    python_output = run_sandboxed_python(code)
-
-    if wants_average:
-        answer = (
-            f"The average value across all {len(values)} dollar-denominated entries is "
-            f"{_format_usd(average)}. I computed this as total dollar figures "
-            f"{_format_usd(total)} divided by {len(values)} entries. Source pages: {', '.join(map(str, pages))}."
-        )
-    else:
-        answer = (
-            f"The total sum of all {len(values)} dollar-denominated figures is {_format_usd(total)}. "
-            f"I summed every dollar amount extracted from the uploaded document. "
-            f"Source pages: {', '.join(map(str, pages))}."
-        )
-
-    return {
-        "answer": answer,
-        "agent_steps": [
-            {
-                "tool": "retrieve_data",
-                "input": {"query": question},
-                "output": labels_preview[:400],
-                "error": False,
-                "retry": 0,
-            },
-            {
-                "tool": "run_python",
-                "input": {"code": code},
-                "output": python_output[:400],
-                "error": python_output.startswith("ERROR"),
-                "retry": 0,
-            },
-        ],
-    }
-
-
 class AnalysisRequest(BaseModel):
     question: str
 
@@ -238,8 +123,6 @@ async def upload(file: UploadFile = File(...)):
     _state["chunks"] = chunks
     _state["filename"] = file.filename
     _state["history"] = []
-    _state["pages"] = pages
-    _state["numeric_entries"] = _extract_numeric_entries(pages)
     return {"status": "ok", "filename": file.filename, "chunks": len(chunks)}
 
 
@@ -256,19 +139,9 @@ def analyze(body: AnalysisRequest):
     if not body.question.strip():
         raise HTTPException(400, "Question cannot be empty.")
     try:
-        direct = _direct_numeric_answer(body.question)
-        if direct:
-            _state["history"].append({"question": body.question, "answer": direct["answer"]})
-            _state["history"] = _state["history"][-10:]
-            return direct
         return _run_analysis(body)
-    except HTTPException:
-        raise
     except Exception as e:
-        if type(e).__name__ == "RateLimitError":
-            raise HTTPException(429, "Rate limit reached on the AI provider. Please wait about 10 seconds and try again.")
-        import traceback
-        raise HTTPException(500, f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
+        raise_for_groq_error(e)
 
 
 def _run_analysis(body: AnalysisRequest):
@@ -311,13 +184,19 @@ def _run_analysis(body: AnalysisRequest):
     MAX_TOTAL_TOOL_CALLS = 12
 
     opening = messages[:1]  # system message, fixed
-    sliding = messages[1:]  # everything else — capped below
+    # Turn-grouped history: each entry is [assistant_msg, tool_msg, tool_msg, ...]
+    # (or a lone user/assistant message). The chat API requires an assistant
+    # message that issues tool_calls to stay adjacent to its tool responses —
+    # trimming by turn keeps that pairing intact, unlike slicing a flat list
+    # of messages by raw count.
+    turns: list[list[dict]] = [[messages[1]]]
+    MAX_CONTEXT_TURNS = 4
 
     for _ in range(12):
         if total_tool_calls >= MAX_TOTAL_TOOL_CALLS:
             break
 
-        current_messages = opening + sliding[-8:]
+        current_messages = opening + [m for turn in turns[-MAX_CONTEXT_TURNS:] for m in turn]
         try:
             response = client.chat.completions.create(
                 model="llama-3.1-8b-instant",
@@ -326,11 +205,9 @@ def _run_analysis(body: AnalysisRequest):
                 tool_choice="auto",
                 temperature=0,
             )
-        except Exception as e:
-            if type(e).__name__ == "BadRequestError":
-                # Model produced a malformed tool call — stop looping, answer from what we have
-                break
-            raise
+        except BadRequestError:
+            # Model produced a malformed tool call — stop looping, answer from what we have
+            break
         msg = response.choices[0].message
         tool_calls = (msg.tool_calls or [])[:MAX_TOOL_CALLS_PER_TURN]
 
@@ -345,7 +222,7 @@ def _run_analysis(body: AnalysisRequest):
                 }
                 for tc in tool_calls
             ]
-        sliding.append(msg_dict)
+        current_turn = [msg_dict]
 
         if not tool_calls:
             answer = msg.content or "No answer produced."
@@ -361,8 +238,8 @@ def _run_analysis(body: AnalysisRequest):
             try:
                 fn_args = json.loads(tc.function.arguments)
             except Exception:
-                sliding.append({"role": "tool", "tool_call_id": tc.id,
-                                "content": "ERROR: malformed tool arguments — retry with valid JSON."})
+                current_turn.append({"role": "tool", "tool_call_id": tc.id,
+                                      "content": "ERROR: malformed tool arguments — retry with valid JSON."})
                 continue
             result = run_tool(fn_name, fn_args)
             total_tool_calls += 1
@@ -379,17 +256,19 @@ def _run_analysis(body: AnalysisRequest):
                 "retry": python_retries if is_error else 0,
             })
 
-            sliding.append({
+            current_turn.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
                 "content": result,
             })
 
             if is_error and python_retries >= MAX_RETRIES:
-                sliding.append({
+                current_turn.append({
                     "role": "user",
                     "content": "Python execution failed too many times. Provide the best answer you can from the retrieved data without running code.",
                 })
+
+        turns.append(current_turn)
 
     final_answer = "Agent did not converge in time. Try a simpler/more specific question."
     _state["history"].append({"question": body.question, "answer": final_answer})

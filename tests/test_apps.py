@@ -193,11 +193,11 @@ def test_app4_upload_and_mock_report(text_pdf, upload_pdf):
             ],
         )
     )
-    # SSE endpoint returns event-stream; just verify it streams without errors.
-    with client.stream("GET", "/generate-report") as response:
-        assert response.status_code == 200
-        chunks = [chunk for chunk in response.iter_text()]
-        assert any("done" in c for c in chunks)
+    r = client.post("/generate-report")
+    assert r.status_code == 200
+    data = r.json()
+    assert "executive_summary" in data["report"]
+    assert any(step["tool"] == "write_section" for step in data["steps"])
 
 
 def test_app5_upload_and_mock_triage(text_pdf, upload_pdf):

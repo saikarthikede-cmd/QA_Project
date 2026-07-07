@@ -2,21 +2,22 @@
 Upload a policy PDF + paste a support ticket → agent retrieves relevant policy
 via tool calls → decides escalate vs auto-resolve → drafts a grounded reply.
 """
-import os, sys, json
+import os, re, sys, json
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dotenv import load_dotenv
-load_dotenv(Path(__file__).parent.parent / ".env")
+load_dotenv(Path(__file__).parent / ".env")
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from groq import Groq
+from groq import BadRequestError, Groq
 from pydantic import BaseModel
 from typing import List
 
+from shared.errors import raise_for_groq_error
 from shared.pdf_utils import build_context, chunk_pages, embed_chunks, extract_pages, retrieve
 
 app = FastAPI(title="App 5 – Policy Triage Agent")
@@ -179,13 +180,8 @@ def triage(body: TriageRequest):
         raise HTTPException(400, "Ticket text cannot be empty.")
     try:
         return _run_triage(body)
-    except HTTPException:
-        raise
     except Exception as e:
-        if type(e).__name__ == "RateLimitError":
-            raise HTTPException(429, "Rate limit reached on the AI provider. Please wait about 10 seconds and try again.")
-        import traceback
-        raise HTTPException(500, f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
+        raise_for_groq_error(e)
 
 
 def _run_triage(body: TriageRequest):
@@ -229,11 +225,9 @@ def _run_triage(body: TriageRequest):
                 tool_choice="auto",
                 temperature=0,
             )
-        except Exception as e:
-            if type(e).__name__ == "BadRequestError":
-                # Model generated pathologically long tool arguments — fall back to final answer
-                break
-            raise
+        except BadRequestError:
+            # Model generated pathologically long tool arguments — fall back to final answer
+            break
         msg = response.choices[0].message
         tool_calls = (msg.tool_calls or [])[:MAX_TOOL_CALLS_PER_TURN]
 
@@ -257,11 +251,9 @@ def _run_triage(body: TriageRequest):
             # Strip markdown code fences if present
             clean = content
             if "```" in clean:
-                import re
                 m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", clean, re.DOTALL)
                 if m:
                     clean = m.group(1)
-            import re as _re
 
             def _try_json(raw: str):
                 try:
@@ -269,7 +261,7 @@ def _run_triage(body: TriageRequest):
                 except Exception:
                     pass
                 try:
-                    return json.loads(_re.sub(r",\s*([}\]])", r"\1", raw))
+                    return json.loads(re.sub(r",\s*([}\]])", r"\1", raw))
                 except Exception:
                     return None
 

@@ -10,13 +10,26 @@ Requires **Python 3.11** (`py -3.11` must work on Windows).
 py -3.11 -m pip install -r requirements.txt
 ```
 
-Create a `.env` file in the project root:
+Each app reads its own `.env` file from its own folder (not a shared root `.env`) — so running all 6 at once doesn't funnel every request through a single Groq key's rate limit. A placeholder `.env` already exists in each app folder; drop a real key into each one:
+
+```
+app1_resume_screener/.env
+app2_doc_diff/.env
+app3_faq_generator/.env
+app4_report_agent/.env
+app5_policy_triage/.env
+app6_data_analyst/.env
+```
+
+Each contains:
 
 ```
 GROQ_API_KEY=gsk_...
 ```
 
-> The apps use Groq (`llama-3.3-70b-versatile`) for generation. A `.env.example` file is provided for reference.
+You can reuse the same key in all six, or use separate keys per app if you want fully independent rate limits. `app2` and `app4` also accept an optional `GROQ_MODEL=` override in their `.env`.
+
+> The apps use Groq (`llama-3.3-70b-versatile`) for generation. All `.env` files are gitignored.
 
 ## Run any app
 
