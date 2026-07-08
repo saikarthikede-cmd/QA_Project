@@ -3,36 +3,36 @@ Agent uses tool calls to decide what to retrieve (retrieve_content) and what
 sections to write (write_section), one section at a time, grounded in its own
 retrieval rather than a single upfront completion.
 """
-import sys, json, re
+import secrets, sys, json, re
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from openai import BadRequestError
 from pydantic import BaseModel
+from starlette.middleware.sessions import SessionMiddleware
 
 from shared.errors import raise_for_groq_error, require_client
 from shared.llm_client import SetKeyRequest, resolve_model, validate_key
 from shared.pdf_utils import build_context, chunk_pages, embed_chunks, extract_pages, is_grounded, retrieve
+from shared.session_store import get_client, get_provider, set_session
 
 app = FastAPI(title="App 4 – Report Summarizer Agent")
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 app.mount("/shared-static", StaticFiles(directory=Path(__file__).parent.parent / "shared" / "static"), name="shared_static")
-
-client = None
-provider = None
+app.add_middleware(SessionMiddleware, secret_key=secrets.token_hex(32))
 
 
 @app.post("/api/set-key")
-def set_key(body: SetKeyRequest):
-    global client, provider
+def set_key(body: SetKeyRequest, request: Request):
     try:
         client, provider = validate_key(body.provider, body.api_key)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    set_session(request, client, provider)
     return {"status": "ok"}
 
 
@@ -153,12 +153,13 @@ async def upload(file: UploadFile = File(...)):
 
 
 @app.post("/generate-report")
-def generate_report():
+def generate_report(request: Request):
     if not _state["chunks"]:
         raise HTTPException(400, "No PDF uploaded yet.")
+    client = get_client(request)
     require_client(client)
     try:
-        return _run_agent()
+        return _run_agent(client, get_provider(request))
     except Exception as e:
         raise_for_groq_error(e)
 
@@ -213,7 +214,7 @@ MAX_TOOL_CALLS_PER_TURN = 3
 MAX_TOTAL_TOOL_CALLS = 20  # 5 sections x (>=1 retrieve + 1 write), with slack
 
 
-def _run_agent():
+def _run_agent(client, provider):
     messages = [{"role": "user", "content": AGENT_SYSTEM_PROMPT_TEMPLATE.format(filename=_state["filename"])}]
     report_sections: dict = {}
     steps = []
@@ -303,7 +304,7 @@ def _run_agent():
 
 
 @app.post("/chat")
-def chat(body: ChatRequest):
+def chat(body: ChatRequest, request: Request):
     if not _state["chunks"]:
         raise HTTPException(400, "No PDF uploaded yet.")
     if not body.question.strip():
@@ -312,6 +313,8 @@ def chat(body: ChatRequest):
     results = retrieve(body.question, _state["chunks"], top_k=3)
     if not is_grounded(results) and not _state["report"]:
         return {"answer": "No relevant content found in the document.", "pages": []}
+    client = get_client(request)
+    provider = get_provider(request)
     require_client(client)
     context = build_context(results)[:1000] if results else "No relevant content found."
 

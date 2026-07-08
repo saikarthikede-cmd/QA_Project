@@ -2,36 +2,36 @@
 Upload any PDF → AI generates Q&A pairs with page citations.
 Users can regenerate individual FAQs, delete them, or request more.
 """
-import sys, json, re
+import secrets, sys, json, re
 from pathlib import Path
 from typing import List, Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.middleware.sessions import SessionMiddleware
 
 from shared.errors import raise_for_groq_error, require_client
 from shared.llm_client import SetKeyRequest, resolve_model, validate_key
 from shared.pdf_utils import build_context, chunk_pages, embed_chunks, extract_pages, is_grounded, retrieve
+from shared.session_store import get_client, get_provider, set_session
 
 app = FastAPI(title="App 3 – FAQ Generator")
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 app.mount("/shared-static", StaticFiles(directory=Path(__file__).parent.parent / "shared" / "static"), name="shared_static")
-
-client = None
-provider = None
+app.add_middleware(SessionMiddleware, secret_key=secrets.token_hex(32))
 
 
 @app.post("/api/set-key")
-def set_key(body: SetKeyRequest):
-    global client, provider
+def set_key(body: SetKeyRequest, request: Request):
     try:
         client, provider = validate_key(body.provider, body.api_key)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    set_session(request, client, provider)
     return {"status": "ok"}
 
 
@@ -92,7 +92,7 @@ def _parse_faq_list(content: str) -> List[dict]:
     return [f for f in parsed if isinstance(f, dict) and f.get("question") and f.get("answer")]
 
 
-def _build_faqs(avoid_questions: Optional[List[str]] = None) -> List[dict]:
+def _build_faqs(client, provider, avoid_questions: Optional[List[str]] = None) -> List[dict]:
     seen_texts = set()
     combined = []
     for q in COVERAGE_QUERIES:
@@ -160,19 +160,20 @@ async def upload(file: UploadFile = File(...)):
     return {"status": "ok", "filename": file.filename, "chunks": len(chunks)}
 
 
-def _safe_build_faqs(avoid_questions: Optional[List[str]] = None) -> List[dict]:
+def _safe_build_faqs(client, provider, avoid_questions: Optional[List[str]] = None) -> List[dict]:
     try:
-        return _build_faqs(avoid_questions)
+        return _build_faqs(client, provider, avoid_questions)
     except Exception as e:
         raise_for_groq_error(e)
 
 
 @app.post("/generate")
-def generate():
+def generate(request: Request):
     if not _state["chunks"]:
         raise HTTPException(400, "No PDF uploaded yet.")
+    client = get_client(request)
     require_client(client)
-    faqs = _safe_build_faqs()
+    faqs = _safe_build_faqs(client, get_provider(request))
     if not faqs:
         raise HTTPException(500, "Failed to generate FAQs. Try again.")
     _state["faqs"] = faqs
@@ -180,26 +181,28 @@ def generate():
 
 
 @app.post("/generate-more")
-def generate_more():
+def generate_more(request: Request):
     if not _state["chunks"]:
         raise HTTPException(400, "No PDF uploaded yet.")
+    client = get_client(request)
     require_client(client)
     existing_qs = [f["question"] for f in _state["faqs"]]
-    new_faqs = _safe_build_faqs(avoid_questions=existing_qs)
+    new_faqs = _safe_build_faqs(client, get_provider(request), avoid_questions=existing_qs)
     _state["faqs"].extend(new_faqs)
     return {"faqs": _state["faqs"], "new_count": len(new_faqs), "total": len(_state["faqs"])}
 
 
 @app.post("/regenerate")
-def regenerate_one(body: RegenerateRequest):
+def regenerate_one(body: RegenerateRequest, request: Request):
     if not _state["chunks"]:
         raise HTTPException(400, "No PDF uploaded.")
     idx = body.index
     if idx < 0 or idx >= len(_state["faqs"]):
         raise HTTPException(400, f"Invalid index {idx}.")
+    client = get_client(request)
     require_client(client)
     avoid = [f["question"] for i, f in enumerate(_state["faqs"]) if i != idx]
-    new_faqs = _safe_build_faqs(avoid_questions=avoid)
+    new_faqs = _safe_build_faqs(client, get_provider(request), avoid_questions=avoid)
     if not new_faqs:
         raise HTTPException(502, "The AI could not generate a replacement question. Please retry.")
     _state["faqs"][idx] = new_faqs[0]
@@ -220,7 +223,7 @@ def get_faqs():
 
 
 @app.post("/ask")
-def ask(body: AskRequest):
+def ask(body: AskRequest, request: Request):
     if not _state["chunks"]:
         raise HTTPException(400, "No PDF uploaded yet.")
     if not body.question.strip():
@@ -229,6 +232,7 @@ def ask(body: AskRequest):
     results = retrieve(body.question, _state["chunks"], top_k=3)
     if not is_grounded(results):
         return {"answer": "No relevant content found in the document.", "pages": []}
+    client = get_client(request)
     require_client(client)
 
     context = build_context(results)[:1200]
@@ -240,14 +244,14 @@ def ask(body: AskRequest):
         "Give a concise, accurate answer (2-4 sentences). End with the page number(s) used."
     )
     try:
-        response = _ask_groq(prompt)
+        response = _ask_groq(client, get_provider(request), prompt)
     except Exception as e:
         raise_for_groq_error(e)
     pages = sorted({r.chunk.page for r in results})
     return {"answer": response.choices[0].message.content.strip(), "pages": pages}
 
 
-def _ask_groq(prompt: str):
+def _ask_groq(client, provider, prompt: str):
     return client.chat.completions.create(
         model=resolve_model(provider, "llama-3.1-8b-instant"),
         messages=[{"role": "user", "content": prompt}],

@@ -3,38 +3,37 @@ Embeds both JD and resumes as chunks.
 Retrieves evidence from each resume using JD-derived queries, then scores.
 Every assessment is grounded in retrieved chunks with page citations.
 """
-import sys, json, re
+import secrets, sys, json, re
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.middleware.sessions import SessionMiddleware
 from typing import List
 
 from shared.errors import raise_for_groq_error, require_client
 from shared.llm_client import SetKeyRequest, resolve_model, validate_key
 from shared.pdf_utils import build_context, chunk_pages, embed_chunks, extract_pages, is_grounded, retrieve
+from shared.session_store import get_client, get_provider, set_session
 
 app = FastAPI(title="App 1 – Resume Screener (RAG)")
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 app.mount("/shared-static", StaticFiles(directory=Path(__file__).parent.parent / "shared" / "static"), name="shared_static")
-
-# Set via the /api/set-key popup once the user picks a provider and pastes
-# their own key — no key is baked into .env anymore.
-client = None
-provider = None
+# Random per-process secret — a restart invalidates every session, same as v1's in-memory-only key.
+app.add_middleware(SessionMiddleware, secret_key=secrets.token_hex(32))
 
 
 @app.post("/api/set-key")
-def set_key(body: SetKeyRequest):
-    global client, provider
+def set_key(body: SetKeyRequest, request: Request):
     try:
         client, provider = validate_key(body.provider, body.api_key)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    set_session(request, client, provider)
     return {"status": "ok"}
 
 
@@ -147,19 +146,20 @@ def remove_resume(filename: str):
 
 
 @app.post("/screen")
-def screen():
+def screen(request: Request):
     if not _state["jd_chunks"]:
         raise HTTPException(400, "No Job Description uploaded.")
     if not _state["resumes"]:
         raise HTTPException(400, "No resumes uploaded.")
+    client = get_client(request)
     require_client(client)
     try:
-        return _run_screen()
+        return _run_screen(client, get_provider(request))
     except Exception as e:
         raise_for_groq_error(e)
 
 
-def _run_screen():
+def _run_screen(client, provider):
     # Build JD context once (retrieve broad overview of the JD)
     jd_overview = retrieve("job requirements responsibilities qualifications", _state["jd_chunks"], top_k=3)
     jd_context = build_context(jd_overview)[:600]
@@ -244,7 +244,7 @@ def _run_screen():
 
 
 @app.post("/ask")
-def ask(body: AskRequest):
+def ask(body: AskRequest, request: Request):
     if not _state["jd_chunks"]:
         raise HTTPException(400, "No Job Description uploaded yet.")
     if not body.question.strip():
@@ -258,6 +258,8 @@ def ask(body: AskRequest):
     results = retrieve(body.question, all_chunks, top_k=4)
     if not is_grounded(results) and not _state["last_results"]:
         return {"answer": "No relevant content found in the job description or resumes.", "pages": []}
+    client = get_client(request)
+    provider = get_provider(request)
     require_client(client)
     context = build_context(results)[:1200] if results else "No relevant content found."
 

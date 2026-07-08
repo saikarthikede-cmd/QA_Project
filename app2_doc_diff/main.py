@@ -3,36 +3,36 @@ Embeds both documents as chunks.
 Cross-retrieves corresponding sections from each document using topic queries,
 then generates a diff grounded in retrieved paired evidence with page citations.
 """
-import io, sys, json, re
+import io, secrets, sys, json, re
 from pathlib import Path
 from typing import List
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pypdf import PdfReader
+from starlette.middleware.sessions import SessionMiddleware
 
 from shared.errors import raise_for_groq_error, require_client
 from shared.llm_client import SetKeyRequest, resolve_model, validate_key
 from shared.pdf_utils import MIN_RELEVANCE_SCORE, chunk_pages, embed_chunks, embed_queries, extract_pages, retrieve_with_embedding
+from shared.session_store import get_client, get_provider, set_session
 
 app = FastAPI(title="App 2 – Document Diff Analyzer (RAG)")
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 app.mount("/shared-static", StaticFiles(directory=Path(__file__).parent.parent / "shared" / "static"), name="shared_static")
-
-client = None
-provider = None
+app.add_middleware(SessionMiddleware, secret_key=secrets.token_hex(32))
 
 
 @app.post("/api/set-key")
-def set_key(body: SetKeyRequest):
-    global client, provider
+def set_key(body: SetKeyRequest, request: Request):
     try:
         client, provider = validate_key(body.provider, body.api_key)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    set_session(request, client, provider)
     return {"status": "ok"}
 
 
@@ -149,19 +149,20 @@ async def upload_b(file: UploadFile = File(...)):
 
 
 @app.post("/analyze")
-def analyze():
+def analyze(request: Request):
     if not _state["doc_a"]["chunks"]:
         raise HTTPException(400, "Document A not uploaded yet.")
     if not _state["doc_b"]["chunks"]:
         raise HTTPException(400, "Document B not uploaded yet.")
+    client = get_client(request)
     require_client(client)
     try:
-        return _run_analyze()
+        return _run_analyze(client, get_provider(request))
     except Exception as e:
         raise_for_groq_error(e)
 
 
-def _run_analyze():
+def _run_analyze(client, provider):
     # RAG: for each topic, retrieve corresponding sections from BOTH documents.
     # Batch-encode all topic queries once instead of embedding each one twice
     # (once per document) inside the loop.

@@ -52,6 +52,17 @@ class FakeLLMClient:
         self.chat = FakeChat(FakeCompletions(response))
 
 
+def set_fake_key(monkeypatch, app_module, client: TestClient, response: FakeResponse) -> FakeLLMClient:
+    """v2: the LLM client lives in a per-session store, not a module global —
+    so tests go through the real /api/set-key flow (with validate_key mocked
+    to skip the real provider call) instead of poking `app_module.client`."""
+    fake_client = FakeLLMClient(response)
+    monkeypatch.setattr(app_module, "validate_key", lambda provider, api_key: (fake_client, provider))
+    r = client.post("/api/set-key", json={"provider": "groq", "api_key": "test-key"})
+    assert r.status_code == 200
+    return fake_client
+
+
 @pytest.fixture
 def upload_pdf(text_pdf):
     def _upload(client: TestClient, url: str = "/upload"):
@@ -66,7 +77,7 @@ def upload_pdf(text_pdf):
     return _upload
 
 
-def test_app1_upload_and_mock_screen(text_pdf, upload_pdf):
+def test_app1_upload_and_mock_screen(text_pdf, upload_pdf, monkeypatch):
     client = TestClient(app1_main.app)
     jd_bytes = text_pdf(
         "Senior Backend Engineer. Requires Python, FastAPI, PostgreSQL, AWS, 5+ years experience."
@@ -83,14 +94,11 @@ def test_app1_upload_and_mock_screen(text_pdf, upload_pdf):
     r = client.post("/upload-resume", files={"file": ("resume.pdf", resume_bytes, "application/pdf")})
     assert r.status_code == 200
 
-    # Mock the Groq client for /screen
-    app1_main.client = FakeLLMClient(
-        FakeResponse(
-            '{"score": 90, "recommendation": "Strong Match", '
-            '"matched_skills": ["Python", "FastAPI"], "missing_skills": [], '
-            '"red_flags": [], "summary": "Great match.", "cited_pages": [1]}'
-        )
-    )
+    set_fake_key(monkeypatch, app1_main, client, FakeResponse(
+        '{"score": 90, "recommendation": "Strong Match", '
+        '"matched_skills": ["Python", "FastAPI"], "missing_skills": [], '
+        '"red_flags": [], "summary": "Great match.", "cited_pages": [1]}'
+    ))
     r = client.post("/screen")
     assert r.status_code == 200
     data = r.json()
@@ -104,7 +112,7 @@ def test_app1_rejects_non_pdf():
     assert r.status_code == 400
 
 
-def test_app2_upload_and_mock_analyze(text_pdf, upload_pdf):
+def test_app2_upload_and_mock_analyze(text_pdf, upload_pdf, monkeypatch):
     client = TestClient(app2_main.app)
     doc_a = text_pdf("Return policy: 30 days. Shipping: 5-7 days.")
     doc_b = text_pdf("Return policy: 60 days. Shipping: 3-5 days.")
@@ -114,41 +122,35 @@ def test_app2_upload_and_mock_analyze(text_pdf, upload_pdf):
     r = client.post("/upload-b", files={"file": ("b.pdf", doc_b, "application/pdf")})
     assert r.status_code == 200
 
-    app2_main.client = FakeLLMClient(
-        FakeResponse(
-            '{"summary": "Policies updated.", "severity": "Major", "change_count": 2, '
-            '"added": [], "removed": [], "modified": [], "unchanged_note": ""}'
-        )
-    )
+    set_fake_key(monkeypatch, app2_main, client, FakeResponse(
+        '{"summary": "Policies updated.", "severity": "Major", "change_count": 2, '
+        '"added": [], "removed": [], "modified": [], "unchanged_note": ""}'
+    ))
     r = client.post("/analyze")
     assert r.status_code == 200
     assert "summary" in r.json()
 
 
-def test_app3_upload_and_mock_generate(text_pdf, upload_pdf):
+def test_app3_upload_and_mock_generate(text_pdf, upload_pdf, monkeypatch):
     client = TestClient(app3_main.app)
     upload_pdf(client, "/upload")
 
-    app3_main.client = FakeLLMClient(
-        FakeResponse(
-            '[{"question": "What is the return policy?", "answer": "30 days.", "page": 1}]'
-        )
-    )
+    set_fake_key(monkeypatch, app3_main, client, FakeResponse(
+        '[{"question": "What is the return policy?", "answer": "30 days.", "page": 1}]'
+    ))
     r = client.post("/generate")
     assert r.status_code == 200
     assert len(r.json()["faqs"]) == 1
 
 
-def test_app3_faq_crud(text_pdf, upload_pdf):
+def test_app3_faq_crud(text_pdf, upload_pdf, monkeypatch):
     client = TestClient(app3_main.app)
     upload_pdf(client, "/upload")
 
-    app3_main.client = FakeLLMClient(
-        FakeResponse(
-            '[{"question": "Q1", "answer": "A1", "page": 1}, '
-            '{"question": "Q2", "answer": "A2", "page": 1}]'
-        )
-    )
+    set_fake_key(monkeypatch, app3_main, client, FakeResponse(
+        '[{"question": "Q1", "answer": "A1", "page": 1}, '
+        '{"question": "Q2", "answer": "A2", "page": 1}]'
+    ))
     client.post("/generate")
 
     # Delete first FAQ
@@ -162,32 +164,30 @@ def test_app3_faq_crud(text_pdf, upload_pdf):
     assert len(r.json()["faqs"]) == 1
 
 
-def test_app4_upload_and_mock_report(text_pdf, upload_pdf):
+def test_app4_upload_and_mock_report(text_pdf, upload_pdf, monkeypatch):
     client = TestClient(app4_main.app)
     upload_pdf(client, "/upload")
 
-    app4_main.client = FakeLLMClient(
-        FakeResponse(
-            "",
-            tool_calls=[
-                type(
-                    "ToolCall",
-                    (),
-                    {
-                        "id": "tc_1",
-                        "function": type(
-                            "Function",
-                            (),
-                            {
-                                "name": "write_section",
-                                "arguments": '{"title": "Executive Summary", "content": "Revenue grew.", "pages": [1]}',
-                            },
-                        )(),
-                    },
-                )()
-            ],
-        )
-    )
+    set_fake_key(monkeypatch, app4_main, client, FakeResponse(
+        "",
+        tool_calls=[
+            type(
+                "ToolCall",
+                (),
+                {
+                    "id": "tc_1",
+                    "function": type(
+                        "Function",
+                        (),
+                        {
+                            "name": "write_section",
+                            "arguments": '{"title": "Executive Summary", "content": "Revenue grew.", "pages": [1]}',
+                        },
+                    )(),
+                },
+            )()
+        ],
+    ))
     r = client.post("/generate-report")
     assert r.status_code == 200
     data = r.json()
@@ -195,47 +195,43 @@ def test_app4_upload_and_mock_report(text_pdf, upload_pdf):
     assert any(step["tool"] == "write_section" for step in data["steps"])
 
 
-def test_app5_upload_and_mock_triage(text_pdf, upload_pdf):
+def test_app5_upload_and_mock_triage(text_pdf, upload_pdf, monkeypatch):
     client = TestClient(app5_main.app)
     upload_pdf(client, "/upload")
 
-    app5_main.client = FakeLLMClient(
-        FakeResponse(
-            '{"decision": "AUTO-RESOLVE", "reason": "Within policy.", '
-            '"draft_reply": "Approved.", "policy_pages": [1]}'
-        )
-    )
+    set_fake_key(monkeypatch, app5_main, client, FakeResponse(
+        '{"decision": "AUTO-RESOLVE", "reason": "Within policy.", '
+        '"draft_reply": "Approved.", "policy_pages": [1]}'
+    ))
     r = client.post("/triage", json={"ticket": "I want a refund within 7 days."})
     assert r.status_code == 200
     assert r.json()["decision"] == "AUTO-RESOLVE"
 
 
-def test_app6_upload_and_mock_analysis(text_pdf, upload_pdf):
+def test_app6_upload_and_mock_analysis(text_pdf, upload_pdf, monkeypatch):
     client = TestClient(app6_main.app)
     upload_pdf(client, "/upload")
 
-    app6_main.client = FakeLLMClient(
-        FakeResponse(
-            "",
-            tool_calls=[
-                type(
-                    "ToolCall",
-                    (),
-                    {
-                        "id": "tc_1",
-                        "function": type(
-                            "Function",
-                            (),
-                            {
-                                "name": "run_python",
-                                "arguments": '{"code": "print(100 - 20)"}',
-                            },
-                        )(),
-                    },
-                )()
-            ],
-        )
-    )
+    set_fake_key(monkeypatch, app6_main, client, FakeResponse(
+        "",
+        tool_calls=[
+            type(
+                "ToolCall",
+                (),
+                {
+                    "id": "tc_1",
+                    "function": type(
+                        "Function",
+                        (),
+                        {
+                            "name": "run_python",
+                            "arguments": '{"code": "print(100 - 20)"}',
+                        },
+                    )(),
+                },
+            )()
+        ],
+    ))
     r = client.post("/analyze", json={"question": "What is revenue minus profit?"})
     assert r.status_code == 200
     data = r.json()
@@ -243,32 +239,30 @@ def test_app6_upload_and_mock_analysis(text_pdf, upload_pdf):
     assert any(step["tool"] == "run_python" for step in data["agent_steps"])
 
 
-def test_app6_sandbox_rejects_malicious_code(text_pdf, upload_pdf):
+def test_app6_sandbox_rejects_malicious_code(text_pdf, upload_pdf, monkeypatch):
     client = TestClient(app6_main.app)
     upload_pdf(client, "/upload")
 
-    app6_main.client = FakeLLMClient(
-        FakeResponse(
-            "",
-            tool_calls=[
-                type(
-                    "ToolCall",
-                    (),
-                    {
-                        "id": "tc_1",
-                        "function": type(
-                            "Function",
-                            (),
-                            {
-                                "name": "run_python",
-                                "arguments": '{"code": "import os\\nprint(os.getcwd())"}',
-                            },
-                        )(),
-                    },
-                )()
-            ],
-        )
-    )
+    set_fake_key(monkeypatch, app6_main, client, FakeResponse(
+        "",
+        tool_calls=[
+            type(
+                "ToolCall",
+                (),
+                {
+                    "id": "tc_1",
+                    "function": type(
+                        "Function",
+                        (),
+                        {
+                            "name": "run_python",
+                            "arguments": '{"code": "import os\\nprint(os.getcwd())"}',
+                        },
+                    )(),
+                },
+            )()
+        ],
+    ))
     r = client.post("/analyze", json={"question": "Try to break out."})
     assert r.status_code == 200
     data = r.json()

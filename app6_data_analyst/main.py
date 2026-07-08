@@ -2,37 +2,37 @@
 Upload a PDF with tables/numbers → ask data questions → agent extracts data,
 writes Python to compute, self-corrects on failure, returns result with page citation.
 """
-import sys, json
+import secrets, sys, json
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from openai import BadRequestError
 from pydantic import BaseModel
+from starlette.middleware.sessions import SessionMiddleware
 
 from shared.errors import raise_for_groq_error, require_client
 from shared.llm_client import SetKeyRequest, resolve_model, validate_key
 from shared.pdf_utils import build_context, chunk_pages, embed_chunks, extract_pages, is_grounded, retrieve
 from shared.safe_exec import run_sandboxed_python
+from shared.session_store import get_client, get_provider, set_session
 
 app = FastAPI(title="App 6 – PDF Data Analyst")
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 app.mount("/shared-static", StaticFiles(directory=Path(__file__).parent.parent / "shared" / "static"), name="shared_static")
-
-client = None
-provider = None
+app.add_middleware(SessionMiddleware, secret_key=secrets.token_hex(32))
 
 
 @app.post("/api/set-key")
-def set_key(body: SetKeyRequest):
-    global client, provider
+def set_key(body: SetKeyRequest, request: Request):
     try:
         client, provider = validate_key(body.provider, body.api_key)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    set_session(request, client, provider)
     return {"status": "ok"}
 
 
@@ -145,19 +145,20 @@ def reset_chat():
 
 
 @app.post("/analyze")
-def analyze(body: AnalysisRequest):
+def analyze(body: AnalysisRequest, request: Request):
     if not _state["chunks"]:
         raise HTTPException(400, "No PDF uploaded yet.")
     if not body.question.strip():
         raise HTTPException(400, "Question cannot be empty.")
+    client = get_client(request)
     require_client(client)
     try:
-        return _run_analysis(body)
+        return _run_analysis(client, get_provider(request), body)
     except Exception as e:
         raise_for_groq_error(e)
 
 
-def _run_analysis(body: AnalysisRequest):
+def _run_analysis(client, provider, body: AnalysisRequest):
     system = (
         f"You are a strict data analyst agent with access to '{_state['filename']}'. "
         "This is a multi-turn conversation — you have memory of earlier questions via recall_previous_answer.\n"
