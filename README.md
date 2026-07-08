@@ -92,15 +92,24 @@ Each of the 6 apps builds as its own image from the shared root `Dockerfile`
 `portal/Dockerfile` (no ML deps — it only proxies status checks).
 
 ```powershell
+.\docker-run.ps1
+```
+
+This builds, starts all 7 containers (`app1`..`app6` on ports 8001-8006, and
+`portal` on 8000), waits for each to actually respond, then prints the URL
+to open for each one. No `.env` file, no key setup, nothing to configure
+before starting — each tester picks a provider and enters their own key in
+that app's popup on first load.
+
+Equivalent without the wrapper (no URL list printed at the end):
+
+```powershell
 docker compose up -d --build
 ```
 
-This starts 7 containers: `app1`..`app6` on ports 8001-8006, and `portal` on
-8000 (http://localhost:8000). No `.env` file, no key setup, nothing to
-configure before starting — each tester picks a provider and enters their
-own key in that app's popup on first load. Inside the compose network, the
-portal reaches each app by service name (`app1`, `app2`, ...) instead of
-`127.0.0.1`, since each container has its own network namespace.
+Inside the compose network, the portal reaches each app by service name
+(`app1`, `app2`, ...) instead of `127.0.0.1`, since each container has its
+own network namespace.
 
 ```powershell
 docker compose down

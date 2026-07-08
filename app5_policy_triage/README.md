@@ -20,6 +20,7 @@ Or use the root launcher:
 
 - `POST /upload` — upload the policy PDF
 - `POST /triage` — submit a support ticket and receive a decision + draft reply
+- `POST /ask` — follow-up question about the policy or the last triage decision
 
 ## QA Checklist
 
@@ -29,3 +30,5 @@ Or use the root launcher:
 - [ ] Draft reply cites policy page numbers
 - [ ] Ticket about something not in policy → escalates with explanation
 - [ ] Scanned PDF rejected
+- [ ] Follow-up question after triage can reference the decision just made (e.g. "why was this escalated?")
+- [ ] Follow-up question before any triage still answers from the policy PDF alone

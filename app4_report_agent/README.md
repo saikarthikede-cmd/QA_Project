@@ -19,7 +19,8 @@ Or use the root launcher:
 ## Endpoints
 
 - `POST /upload` — upload the PDF
-- `GET /generate-report` — streams SSE events with agent steps and the final report
+- `POST /generate-report` — runs the agent, returns the final report plus the tool-call steps it took
+- `POST /chat` — follow-up question about the document or the generated report
 
 ## QA Checklist
 

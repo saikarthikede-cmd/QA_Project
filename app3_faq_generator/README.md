@@ -24,6 +24,7 @@ Or use the root launcher:
 - `POST /regenerate` — regenerate one FAQ by index
 - `DELETE /faqs/{index}` — delete one FAQ
 - `GET /faqs` — list current FAQs
+- `POST /ask` — ask a custom question about the source PDF
 
 ## QA Checklist
 

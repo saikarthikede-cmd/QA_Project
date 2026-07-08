@@ -22,6 +22,7 @@ Or use the root launcher:
 - `POST /upload-resume` — upload one or more candidate resumes
 - `DELETE /resumes/{filename}` — remove a loaded resume
 - `POST /screen` — score all loaded resumes against the JD
+- `POST /ask` — follow-up question about the JD, resumes, or screening results
 
 ## QA Checklist
 
