@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from shared.errors import raise_for_groq_error, require_client
 from shared.llm_client import SetKeyRequest, resolve_model, validate_key
-from shared.pdf_utils import build_context, chunk_pages, embed_chunks, extract_pages, is_grounded, retrieve
+from shared.pdf_utils import build_context, chunk_pages, embed_chunks, extract_pages, retrieve
 from shared.safe_exec import run_sandboxed_python
 
 app = FastAPI(title="App 6 – PDF Data Analyst")
@@ -89,7 +89,15 @@ TOOLS = [
 def run_tool(name: str, args: dict) -> str:
     if name == "retrieve_data":
         results = retrieve(args["query"], _state["chunks"], top_k=5)
-        if not is_grounded(results):
+        # No is_grounded() veto here: this is a tool call inside an agentic
+        # loop, not the final answer — the query is the model's own
+        # exploratory sub-query and can legitimately score low on cosine
+        # similarity while still returning the chunk it actually needs. The
+        # system prompt already tells the model to say "I can't find this"
+        # when the retrieved chunks don't contain what was asked; vetoing
+        # here would hide real data from that judgment call instead of
+        # deferring to it.
+        if not results:
             return "No relevant data found for this query."
         return build_context(results)
 

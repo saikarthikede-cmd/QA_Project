@@ -128,7 +128,11 @@ def run_tool(name: str, args: dict) -> str:
         # Truncate query to prevent the model from generating pathologically long strings
         query = args.get("query", "")[:300]
         results = retrieve(query, _state["chunks"], top_k=3)
-        if not is_grounded(results):
+        # No is_grounded() veto here — same reasoning as app6's retrieve_data:
+        # this is an exploratory sub-query inside the agent's own reasoning
+        # loop, not the final answer. The triage system prompt already
+        # judges whether retrieved policy text actually supports a decision.
+        if not results:
             return "No relevant policy found for this query."
         return build_context(results)[:900]
 
