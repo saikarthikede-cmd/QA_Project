@@ -210,6 +210,25 @@ def test_app5_upload_and_mock_triage(text_pdf, upload_pdf):
     assert r.json()["decision"] == "AUTO-RESOLVE"
 
 
+def test_app5_ask_followup(text_pdf, upload_pdf):
+    client = TestClient(app5_main.app)
+    upload_pdf(client, "/upload")
+
+    app5_main.client = FakeLLMClient(FakeResponse("The return policy allows 30 days."))
+    r = client.post("/ask", json={"question": "What is the return policy?"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["answer"] == "The return policy allows 30 days."
+    assert "pages" in data
+
+
+def test_app5_ask_before_upload_rejected():
+    client = TestClient(app5_main.app)
+    app5_main._state["chunks"] = []  # _state is a module global — reset in case an earlier test left it populated
+    r = client.post("/ask", json={"question": "What is the return policy?"})
+    assert r.status_code == 400
+
+
 def test_app6_upload_and_mock_analysis(text_pdf, upload_pdf):
     client = TestClient(app6_main.app)
     upload_pdf(client, "/upload")

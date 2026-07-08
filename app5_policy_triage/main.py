@@ -35,7 +35,7 @@ def set_key(body: SetKeyRequest):
     return {"status": "ok"}
 
 
-_state: dict = {"chunks": [], "filename": ""}
+_state: dict = {"chunks": [], "filename": "", "last_result": None, "chat_history": []}
 
 # Multi-tool agent: retrieval + three rule-based / heuristic tools the agent picks among.
 TOOLS = [
@@ -156,6 +156,10 @@ class TriageRequest(BaseModel):
     ticket: str
 
 
+class AskRequest(BaseModel):
+    question: str
+
+
 @app.get("/")
 def index():
     return FileResponse(Path(__file__).parent / "static" / "index.html")
@@ -180,6 +184,8 @@ async def upload(file: UploadFile = File(...)):
     chunks = embed_chunks(chunks)
     _state["chunks"] = chunks
     _state["filename"] = file.filename
+    _state["last_result"] = None
+    _state["chat_history"] = []
     return {"status": "ok", "filename": file.filename, "chunks": len(chunks)}
 
 
@@ -191,7 +197,10 @@ def triage(body: TriageRequest):
         raise HTTPException(400, "Ticket text cannot be empty.")
     require_client(client)
     try:
-        return _run_triage(body)
+        result = _run_triage(body)
+        _state["last_result"] = result
+        _state["chat_history"] = []
+        return result
     except Exception as e:
         raise_for_groq_error(e)
 
@@ -327,3 +336,56 @@ def _run_triage(body: TriageRequest):
             })
 
     return {"decision": "ESCALATE", "reason": "Agent could not reach a conclusion.", "draft_reply": "", "policy_pages": [], "agent_steps": agent_steps}
+
+
+@app.post("/ask")
+def ask(body: AskRequest):
+    if not _state["chunks"]:
+        raise HTTPException(400, "No policy PDF uploaded yet.")
+    if not body.question.strip():
+        raise HTTPException(400, "Question cannot be empty.")
+
+    results = retrieve(body.question, _state["chunks"], top_k=3)
+    if not is_grounded(results) and not _state["last_result"]:
+        return {"answer": "No relevant content found in the policy document.", "pages": []}
+    require_client(client)
+    context = build_context(results)[:1000] if results else "No relevant content found."
+
+    triage_summary = ""
+    if _state["last_result"]:
+        lr = _state["last_result"]
+        triage_summary = (
+            f"Decision: {lr.get('decision', '')}. Reason: {lr.get('reason', '')}. "
+            f"Draft reply sent: {lr.get('draft_reply', '')[:200]}"
+        )
+
+    history_text = "\n".join(
+        f"Q: {h['question']}\nA: {h['answer'][:200]}" for h in _state["chat_history"][-3:]
+    )
+
+    prompt = (
+        f"You are answering follow-up questions about a policy triage for '{_state['filename']}'.\n\n"
+        + (f"TRIAGE RESULT (for context):\n{triage_summary}\n\n" if triage_summary else "")
+        + f"RETRIEVED POLICY EXCERPTS:\n{context}\n\n"
+        + (f"RECENT CONVERSATION:\n{history_text}\n\n" if history_text else "")
+        + f"QUESTION: {body.question}\n\n"
+        "Answer using only the triage result and retrieved policy excerpts above. If not covered, say so. "
+        "Keep it concise (2-4 sentences) and cite page numbers where relevant."
+    )
+
+    try:
+        response = client.chat.completions.create(
+            model=resolve_model(provider, "llama-3.1-8b-instant"),
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+        )
+    except Exception as e:
+        raise_for_groq_error(e)
+
+    answer = response.choices[0].message.content.strip()
+    pages = sorted({r.chunk.page for r in results})
+
+    _state["chat_history"].append({"question": body.question, "answer": answer})
+    _state["chat_history"] = _state["chat_history"][-10:]
+
+    return {"answer": answer, "pages": pages}

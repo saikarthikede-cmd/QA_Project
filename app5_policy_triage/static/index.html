@@ -47,6 +47,20 @@
   .scenario-name{font-size:.85rem;font-weight:600;color:#e2e8f0;margin-bottom:5px}
   .scenario-preview{font-size:.74rem;color:#64748b;line-height:1.4;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
   .scenario-use{font-size:.7rem;color:#475569;margin-top:5px;font-style:italic}
+  .chat-section{display:none}
+  .chat-section.active{display:block}
+  .chat-log{max-height:360px;overflow-y:auto;margin-bottom:14px;display:flex;flex-direction:column;gap:10px}
+  .chat-msg{padding:10px 14px;border-radius:10px;font-size:.86rem;line-height:1.5;max-width:85%}
+  .chat-msg.user{background:#be185d;color:#fff;align-self:flex-end}
+  .chat-msg.bot{background:#0f172a;border:1px solid #334155;color:#cbd5e1;align-self:flex-start}
+  .chat-msg .chat-pages{font-size:.72rem;color:#f472b6;margin-top:6px}
+  .chat-input-row{display:flex;gap:8px}
+  .chat-input{flex:1;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:10px 12px;color:#e2e8f0;font-size:.88rem}
+  .chat-input:focus{outline:none;border-color:#f472b6}
+  .chip-row{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:12px}
+  .chip{background:#0f172a;border:1px solid #334155;border-radius:20px;padding:5px 13px;font-size:.75rem;color:#94a3b8;cursor:pointer;transition:all .15s}
+  .chip:hover{border-color:#f472b6;color:#f472b6}
+  .chip-group-label{font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#475569;width:100%;margin-top:4px;margin-bottom:2px}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 </head>
@@ -114,6 +128,25 @@
   <button class="dl-btn" id="dlBtn" onclick="downloadResult()">⬇ Download Triage Result</button>
 </div>
 
+<div class="card chat-section" id="chatSection">
+  <h2><span class="badge">3</span> Ask Follow-Up Questions</h2>
+  <div class="chip-row">
+    <span class="chip-group-label">About the policy</span>
+    <span class="chip" onclick="fillChat5(this)">What is the refund policy?</span>
+    <span class="chip" onclick="fillChat5(this)">What is the SLA for this issue type?</span>
+    <span class="chip-group-label">About the last decision</span>
+    <span class="chip" onclick="fillChat5(this)">Why was this ticket escalated or auto-resolved?</span>
+    <span class="chip" onclick="fillChat5(this)">What page of the policy supports that decision?</span>
+    <span class="chip-group-label">Out-of-scope (expect "not covered" answer)</span>
+    <span class="chip" onclick="fillChat5(this)">What is the CEO's phone number?</span>
+  </div>
+  <div class="chat-log" id="chatLog"></div>
+  <div class="chat-input-row">
+    <input type="text" class="chat-input" id="chatInput" placeholder="Ask anything about the policy or the last decision…" onkeydown="if(event.key==='Enter')sendChat5()"/>
+    <button class="btn" id="chatSendBtn" onclick="sendChat5()">Ask</button>
+  </div>
+</div>
+
 <script>
 const pdfInput=document.getElementById('pdfInput');
 const uploadStatus=document.getElementById('uploadStatus');
@@ -143,6 +176,8 @@ async function uploadFile(file){
     uploadStatus.textContent=`✓ "${d.filename}" — ${d.chunks} chunks indexed.`;
     triageSection.classList.add('active');
     dlBtn.style.display='none';
+    document.getElementById('chatSection').classList.add('active');
+    document.getElementById('chatLog').innerHTML='';
   }catch(e){
     uploadStatus.className='status err';
     uploadStatus.textContent='✗ '+e.message;
@@ -247,6 +282,34 @@ function renderResult(d){
 }
 
 function escHtml(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function fillChat5(el){document.getElementById('chatInput').value=el.textContent.trim();document.getElementById('chatInput').focus();}
+
+async function sendChat5(){
+  const input=document.getElementById('chatInput');
+  const q=input.value.trim();
+  if(!q)return;
+  const log=document.getElementById('chatLog');
+  const sendBtn=document.getElementById('chatSendBtn');
+  log.innerHTML+=`<div class="chat-msg user">${escHtml(q)}</div>`;
+  log.scrollTop=log.scrollHeight;
+  input.value='';
+  sendBtn.disabled=true;
+  const thinkingId='thinking-'+Date.now();
+  log.innerHTML+=`<div class="chat-msg bot" id="${thinkingId}">⏳ Thinking…</div>`;
+  log.scrollTop=log.scrollHeight;
+  try{
+    const r=await fetch('/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q})});
+    const d=await r.json();
+    const el=document.getElementById(thinkingId);
+    if(!r.ok)throw new Error(d.detail||'Error');
+    el.innerHTML=escHtml(d.answer)+(d.pages&&d.pages.length?`<div class="chat-pages">📄 Pages: ${d.pages.join(', ')}</div>`:'');
+  }catch(e){
+    document.getElementById(thinkingId).innerHTML='✗ '+escHtml(e.message);
+  }finally{
+    sendBtn.disabled=false;
+    log.scrollTop=log.scrollHeight;
+  }
+}
 
 const _TICKETS=[
   "I'd like to cancel my subscription and receive a refund. I signed up 3 days ago and haven't used the service at all.",
@@ -265,7 +328,7 @@ function loadTicket(i){
 <!-- ══ QA Run History (localStorage, per-browser) ══ -->
 <script>
 (function(){
-  var KEY='qa_hist_app5', MAX=20, TRACK=["/triage"], ACCENT='#f472b6';
+  var KEY='qa_hist_app5', MAX=20, TRACK=["/triage", "/ask"], ACCENT='#f472b6';
   function load(){try{var v=JSON.parse(localStorage.getItem(KEY));return Array.isArray(v)?v:[]}catch(e){return[]}}
   function save(l){try{localStorage.setItem(KEY,JSON.stringify(l.slice(0,MAX)))}catch(e){}}
   function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
