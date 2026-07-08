@@ -3,26 +3,38 @@ Agent uses tool calls to decide what to retrieve (retrieve_content) and what
 sections to write (write_section), one section at a time, grounded in its own
 retrieval rather than a single upfront completion.
 """
-import os, sys, json, re
+import sys, json, re
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from dotenv import load_dotenv
-load_dotenv(Path(__file__).parent / ".env")
-
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from groq import BadRequestError, Groq
+from openai import BadRequestError
 from pydantic import BaseModel
 
-from shared.errors import raise_for_groq_error
-from shared.pdf_utils import build_context, chunk_pages, embed_chunks, extract_pages, retrieve
+from shared.errors import raise_for_groq_error, require_client
+from shared.llm_client import SetKeyRequest, resolve_model, validate_key
+from shared.pdf_utils import build_context, chunk_pages, embed_chunks, extract_pages, is_grounded, retrieve
 
 app = FastAPI(title="App 4 – Report Summarizer Agent")
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
-client = Groq(api_key=os.environ["GROQ_API_KEY"])
+app.mount("/shared-static", StaticFiles(directory=Path(__file__).parent.parent / "shared" / "static"), name="shared_static")
+
+client = None
+provider = None
+
+
+@app.post("/api/set-key")
+def set_key(body: SetKeyRequest):
+    global client, provider
+    try:
+        client, provider = validate_key(body.provider, body.api_key)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"status": "ok"}
+
 
 _state: dict = {"chunks": [], "filename": "", "report": {}, "chat_history": []}
 
@@ -31,7 +43,7 @@ class ChatRequest(BaseModel):
     question: str
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
-MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+MODEL = "llama-3.3-70b-versatile"
 
 TOOLS = [
     {
@@ -144,6 +156,7 @@ async def upload(file: UploadFile = File(...)):
 def generate_report():
     if not _state["chunks"]:
         raise HTTPException(400, "No PDF uploaded yet.")
+    require_client(client)
     try:
         return _run_agent()
     except Exception as e:
@@ -211,7 +224,7 @@ def _run_agent():
             break
         try:
             response = client.chat.completions.create(
-                model=MODEL,
+                model=resolve_model(provider, MODEL),
                 messages=messages,
                 tools=TOOLS,
                 tool_choice="auto",
@@ -272,7 +285,7 @@ def _run_agent():
             '"risks_challenges":{"label":"Risks & Challenges","content":"...","pages":[1]}}}'
         )
         response = client.chat.completions.create(
-            model=MODEL,
+            model=resolve_model(provider, MODEL),
             messages=[{"role": "user", "content": fallback_prompt}],
             temperature=0,
             response_format={"type": "json_object"},
@@ -297,6 +310,9 @@ def chat(body: ChatRequest):
         raise HTTPException(400, "Question cannot be empty.")
 
     results = retrieve(body.question, _state["chunks"], top_k=3)
+    if not is_grounded(results) and not _state["report"]:
+        return {"answer": "No relevant content found in the document.", "pages": []}
+    require_client(client)
     context = build_context(results)[:1000] if results else "No relevant content found."
 
     report_summary = ""
@@ -321,7 +337,7 @@ def chat(body: ChatRequest):
 
     try:
         response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model=resolve_model(provider, "llama-3.1-8b-instant"),
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
         )

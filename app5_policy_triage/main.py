@@ -2,27 +2,38 @@
 Upload a policy PDF + paste a support ticket → agent retrieves relevant policy
 via tool calls → decides escalate vs auto-resolve → drafts a grounded reply.
 """
-import os, re, sys, json
+import re, sys, json
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from dotenv import load_dotenv
-load_dotenv(Path(__file__).parent / ".env")
-
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from groq import BadRequestError, Groq
+from openai import BadRequestError
 from pydantic import BaseModel
-from typing import List
 
-from shared.errors import raise_for_groq_error
-from shared.pdf_utils import build_context, chunk_pages, embed_chunks, extract_pages, retrieve
+from shared.errors import raise_for_groq_error, require_client
+from shared.llm_client import SetKeyRequest, resolve_model, validate_key
+from shared.pdf_utils import build_context, chunk_pages, embed_chunks, extract_pages, is_grounded, retrieve
 
 app = FastAPI(title="App 5 – Policy Triage Agent")
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
-client = Groq(api_key=os.environ["GROQ_API_KEY"])
+app.mount("/shared-static", StaticFiles(directory=Path(__file__).parent.parent / "shared" / "static"), name="shared_static")
+
+client = None
+provider = None
+
+
+@app.post("/api/set-key")
+def set_key(body: SetKeyRequest):
+    global client, provider
+    try:
+        client, provider = validate_key(body.provider, body.api_key)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"status": "ok"}
+
 
 _state: dict = {"chunks": [], "filename": ""}
 
@@ -117,7 +128,7 @@ def run_tool(name: str, args: dict) -> str:
         # Truncate query to prevent the model from generating pathologically long strings
         query = args.get("query", "")[:300]
         results = retrieve(query, _state["chunks"], top_k=3)
-        if not results:
+        if not is_grounded(results):
             return "No relevant policy found for this query."
         return build_context(results)[:900]
 
@@ -178,6 +189,7 @@ def triage(body: TriageRequest):
         raise HTTPException(400, "No policy PDF uploaded yet.")
     if not body.ticket.strip():
         raise HTTPException(400, "Ticket text cannot be empty.")
+    require_client(client)
     try:
         return _run_triage(body)
     except Exception as e:
@@ -219,7 +231,7 @@ def _run_triage(body: TriageRequest):
 
         try:
             response = client.chat.completions.create(
-                model="llama-3.1-8b-instant",
+                model=resolve_model(provider, "llama-3.1-8b-instant"),
                 messages=messages,
                 tools=TOOLS,
                 tool_choice="auto",
@@ -273,7 +285,7 @@ def _run_triage(body: TriageRequest):
                 # Re-prompt for structured JSON
                 messages.append({"role": "user", "content": "Now return your final answer as a JSON object with keys: decision, reason, draft_reply, policy_pages. No markdown, raw JSON only."})
                 r2 = client.chat.completions.create(
-                    model="llama-3.1-8b-instant", messages=messages, temperature=0,
+                    model=resolve_model(provider, "llama-3.1-8b-instant"), messages=messages, temperature=0,
                     response_format={"type": "json_object"},
                 )
                 content2 = r2.choices[0].message.content or ""

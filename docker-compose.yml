@@ -1,0 +1,43 @@
+services:
+  app1:
+    build: {context: ., args: {APP_DIR: app1_resume_screener, PORT: "8001"}}
+    ports: ["8001:8001"]
+    restart: unless-stopped
+
+  app2:
+    build: {context: ., args: {APP_DIR: app2_doc_diff, PORT: "8002"}}
+    ports: ["8002:8002"]
+    restart: unless-stopped
+
+  app3:
+    build: {context: ., args: {APP_DIR: app3_faq_generator, PORT: "8003"}}
+    ports: ["8003:8003"]
+    restart: unless-stopped
+
+  app4:
+    build: {context: ., args: {APP_DIR: app4_report_agent, PORT: "8004"}}
+    ports: ["8004:8004"]
+    restart: unless-stopped
+
+  app5:
+    build: {context: ., args: {APP_DIR: app5_policy_triage, PORT: "8005"}}
+    ports: ["8005:8005"]
+    restart: unless-stopped
+
+  app6:
+    build: {context: ., args: {APP_DIR: app6_data_analyst, PORT: "8006"}}
+    ports: ["8006:8006"]
+    restart: unless-stopped
+
+  portal:
+    build: {context: ./portal}
+    ports: ["8000:8000"]
+    environment:
+      APP1_HOST: app1
+      APP2_HOST: app2
+      APP3_HOST: app3
+      APP4_HOST: app4
+      APP5_HOST: app5
+      APP6_HOST: app6
+    depends_on: [app1, app2, app3, app4, app5, app6]
+    restart: unless-stopped

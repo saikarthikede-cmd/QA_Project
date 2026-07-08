@@ -4,9 +4,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from dotenv import load_dotenv
-load_dotenv(Path(__file__).parent.parent / ".env")
-
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -24,6 +21,12 @@ APPS = [
     {"id": "app6", "port": 8006, "name": "Data Analyst Agent",   "icon": "📈", "color": "#a855f7", "desc": "Upload a data CSV or PDF. Multi-turn agent runs Python computations and remembers previous answers across turns."},
 ]
 
+# Host to reach each app's own container/process on. Defaults to loopback for
+# local (non-Docker) runs; docker-compose overrides these to service names
+# since 127.0.0.1 inside the portal container is the portal itself, not app1-6.
+for _a in APPS:
+    _a["host"] = os.getenv(f"{_a['id'].upper()}_HOST", "127.0.0.1")
+
 
 @app.get("/")
 def index():
@@ -35,7 +38,7 @@ def index():
 
 async def _check(client: httpx.AsyncClient, a: dict) -> tuple[str, str]:
     try:
-        r = await client.get(f"http://127.0.0.1:{a['port']}/")
+        r = await client.get(f"http://{a['host']}:{a['port']}/")
         return a["id"], ("up" if r.status_code < 500 else "error")
     except Exception:
         return a["id"], "down"

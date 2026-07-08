@@ -10,26 +10,12 @@ Requires **Python 3.11** (`py -3.11` must work on Windows).
 py -3.11 -m pip install -r requirements.txt
 ```
 
-Each app reads its own `.env` file from its own folder (not a shared root `.env`) — so running all 6 at once doesn't funnel every request through a single Groq key's rate limit. A placeholder `.env` already exists in each app folder; drop a real key into each one:
-
-```
-app1_resume_screener/.env
-app2_doc_diff/.env
-app3_faq_generator/.env
-app4_report_agent/.env
-app5_policy_triage/.env
-app6_data_analyst/.env
-```
-
-Each contains:
-
-```
-GROQ_API_KEY=gsk_...
-```
-
-You can reuse the same key in all six, or use separate keys per app if you want fully independent rate limits. `app2` and `app4` also accept an optional `GROQ_MODEL=` override in their `.env`.
-
-> The apps use Groq (`llama-3.3-70b-versatile`) for generation. All `.env` files are gitignored.
+**No `.env` file, no API key setup, nothing to configure before running.**
+Each app prompts the user for their own key the moment its page loads — a
+popup asks them to pick a provider (Groq or OpenAI) and paste their key,
+validates it against that provider's real API, and only then unlocks the
+rest of the page. The key is held in memory for that server process only
+(never written to disk); a fresh page load always asks again.
 
 ## Run any app
 
@@ -67,12 +53,12 @@ py -3.11 -m uvicorn main:app --reload --port 8001
 - **Chunking**: 900 chars, 150 overlap, tagged with page number
 - **Embeddings**: sentence-transformers `all-MiniLM-L6-v2` (local)
 - **Retrieval**: cosine similarity, top 5 chunks
-- **Generation**: Groq `llama-3.3-70b-versatile`
+- **Generation**: user-supplied Groq (`llama-3.3-70b-versatile` / `llama-3.1-8b-instant`) or OpenAI (`gpt-4o-mini`) key, entered per-app via a popup on page load
 - **Scanned PDFs**: rejected with a clear error message
 
 ## Security Notes
 
-- `.env` is ignored by Git and must never be committed.
+- No API key lives on disk anywhere in this project. Users supply their own key at runtime via each app's popup, validated against the real provider API before use and held in memory only for that process.
 - LLM-generated Python in App 6 runs inside a sandbox (`shared/safe_exec.py`) that forbids imports, file/network access, and dangerous builtins.
 - All state is in-memory; restarting a server clears uploaded documents.
 
@@ -98,3 +84,24 @@ py -3.11 -m pytest tests/
 ```
 
 See `tests/` for shared utility and endpoint smoke tests.
+
+## Docker
+
+Each of the 6 apps builds as its own image from the shared root `Dockerfile`
+(parameterized by build args); the portal builds from its own lightweight
+`portal/Dockerfile` (no ML deps — it only proxies status checks).
+
+```powershell
+docker compose up -d --build
+```
+
+This starts 7 containers: `app1`..`app6` on ports 8001-8006, and `portal` on
+8000 (http://localhost:8000). No `.env` file, no key setup, nothing to
+configure before starting — each tester picks a provider and enters their
+own key in that app's popup on first load. Inside the compose network, the
+portal reaches each app by service name (`app1`, `app2`, ...) instead of
+`127.0.0.1`, since each container has its own network namespace.
+
+```powershell
+docker compose down
+```

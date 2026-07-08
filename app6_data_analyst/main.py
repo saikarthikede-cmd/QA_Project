@@ -2,27 +2,39 @@
 Upload a PDF with tables/numbers → ask data questions → agent extracts data,
 writes Python to compute, self-corrects on failure, returns result with page citation.
 """
-import os, sys, json
+import sys, json
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from dotenv import load_dotenv
-load_dotenv(Path(__file__).parent / ".env")
-
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from groq import BadRequestError, Groq
+from openai import BadRequestError
 from pydantic import BaseModel
 
-from shared.errors import raise_for_groq_error
-from shared.pdf_utils import build_context, chunk_pages, embed_chunks, extract_pages, retrieve
+from shared.errors import raise_for_groq_error, require_client
+from shared.llm_client import SetKeyRequest, resolve_model, validate_key
+from shared.pdf_utils import build_context, chunk_pages, embed_chunks, extract_pages, is_grounded, retrieve
 from shared.safe_exec import run_sandboxed_python
 
 app = FastAPI(title="App 6 – PDF Data Analyst")
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
-client = Groq(api_key=os.environ["GROQ_API_KEY"])
+app.mount("/shared-static", StaticFiles(directory=Path(__file__).parent.parent / "shared" / "static"), name="shared_static")
+
+client = None
+provider = None
+
+
+@app.post("/api/set-key")
+def set_key(body: SetKeyRequest):
+    global client, provider
+    try:
+        client, provider = validate_key(body.provider, body.api_key)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"status": "ok"}
+
 
 _state: dict = {"chunks": [], "filename": "", "history": []}
 
@@ -77,7 +89,7 @@ TOOLS = [
 def run_tool(name: str, args: dict) -> str:
     if name == "retrieve_data":
         results = retrieve(args["query"], _state["chunks"], top_k=5)
-        if not results:
+        if not is_grounded(results):
             return "No relevant data found for this query."
         return build_context(results)
 
@@ -138,6 +150,7 @@ def analyze(body: AnalysisRequest):
         raise HTTPException(400, "No PDF uploaded yet.")
     if not body.question.strip():
         raise HTTPException(400, "Question cannot be empty.")
+    require_client(client)
     try:
         return _run_analysis(body)
     except Exception as e:
@@ -199,7 +212,7 @@ def _run_analysis(body: AnalysisRequest):
         current_messages = opening + [m for turn in turns[-MAX_CONTEXT_TURNS:] for m in turn]
         try:
             response = client.chat.completions.create(
-                model="llama-3.1-8b-instant",
+                model=resolve_model(provider, "llama-3.1-8b-instant"),
                 messages=current_messages,
                 tools=TOOLS,
                 tool_choice="auto",

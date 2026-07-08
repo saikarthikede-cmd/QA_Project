@@ -19,6 +19,10 @@ CHUNK_SIZE = 900
 CHUNK_OVERLAP = 150
 TOP_K = 5
 
+# Coarse relevance gate: below this cosine score, treat retrieval as "no match"
+# rather than trusting the LLM to notice the context is irrelevant.
+MIN_RELEVANCE_SCORE = 0.20
+
 
 def get_model() -> SentenceTransformer:
     global _MODEL
@@ -160,6 +164,15 @@ def retrieve_with_embedding(
 # ---------------------------------------------------------------------------
 # Context builder (for LLM prompt)
 # ---------------------------------------------------------------------------
+
+def is_grounded(retrieved: List[RetrievedChunk], min_score: float = MIN_RELEVANCE_SCORE) -> bool:
+    """Code-level veto: is the top retrieved chunk relevant enough to generate from?
+
+    A coarse pre-filter only — catches the totally-unrelated case. Deliberately
+    not a judgment call left to the LLM.
+    """
+    return bool(retrieved) and retrieved[0].score >= min_score
+
 
 def build_context(retrieved: List[RetrievedChunk], include_source: bool = False) -> str:
     parts = []

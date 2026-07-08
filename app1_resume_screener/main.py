@@ -3,27 +3,40 @@ Embeds both JD and resumes as chunks.
 Retrieves evidence from each resume using JD-derived queries, then scores.
 Every assessment is grounded in retrieved chunks with page citations.
 """
-import os, sys, json, re
+import sys, json, re
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from dotenv import load_dotenv
-load_dotenv(Path(__file__).parent / ".env")
-
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from groq import Groq
 from pydantic import BaseModel
 from typing import List
 
-from shared.errors import raise_for_groq_error
-from shared.pdf_utils import build_context, chunk_pages, embed_chunks, extract_pages, retrieve
+from shared.errors import raise_for_groq_error, require_client
+from shared.llm_client import SetKeyRequest, resolve_model, validate_key
+from shared.pdf_utils import build_context, chunk_pages, embed_chunks, extract_pages, is_grounded, retrieve
 
 app = FastAPI(title="App 1 – Resume Screener (RAG)")
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
-client = Groq(api_key=os.environ["GROQ_API_KEY"])
+app.mount("/shared-static", StaticFiles(directory=Path(__file__).parent.parent / "shared" / "static"), name="shared_static")
+
+# Set via the /api/set-key popup once the user picks a provider and pastes
+# their own key — no key is baked into .env anymore.
+client = None
+provider = None
+
+
+@app.post("/api/set-key")
+def set_key(body: SetKeyRequest):
+    global client, provider
+    try:
+        client, provider = validate_key(body.provider, body.api_key)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"status": "ok"}
+
 
 _state: dict = {
     "jd_chunks": [],
@@ -139,6 +152,7 @@ def screen():
         raise HTTPException(400, "No Job Description uploaded.")
     if not _state["resumes"]:
         raise HTTPException(400, "No resumes uploaded.")
+    require_client(client)
     try:
         return _run_screen()
     except Exception as e:
@@ -186,7 +200,7 @@ def _run_screen():
         )
 
         response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model=resolve_model(provider, "llama-3.1-8b-instant"),
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
             response_format={"type": "json_object"},
@@ -195,7 +209,7 @@ def _run_screen():
         if not data or "score" not in data:
             # Retry once without forced JSON mode before giving up
             response = client.chat.completions.create(
-                model="llama-3.1-8b-instant",
+                model=resolve_model(provider, "llama-3.1-8b-instant"),
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0,
             )
@@ -242,6 +256,9 @@ def ask(body: AskRequest):
         all_chunks = all_chunks + resume_chunks
 
     results = retrieve(body.question, all_chunks, top_k=4)
+    if not is_grounded(results) and not _state["last_results"]:
+        return {"answer": "No relevant content found in the job description or resumes.", "pages": []}
+    require_client(client)
     context = build_context(results)[:1200] if results else "No relevant content found."
 
     # Summarise screening results so agent can reference scores/skills
@@ -275,7 +292,7 @@ def ask(body: AskRequest):
 
     try:
         response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model=resolve_model(provider, "llama-3.1-8b-instant"),
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
         )

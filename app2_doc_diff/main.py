@@ -3,27 +3,38 @@ Embeds both documents as chunks.
 Cross-retrieves corresponding sections from each document using topic queries,
 then generates a diff grounded in retrieved paired evidence with page citations.
 """
-import io, os, sys, json, re
+import io, sys, json, re
 from pathlib import Path
 from typing import List
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from dotenv import load_dotenv
-load_dotenv(Path(__file__).parent / ".env")
-
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from groq import Groq
 from pypdf import PdfReader
 
-from shared.errors import raise_for_groq_error
-from shared.pdf_utils import chunk_pages, embed_chunks, embed_queries, extract_pages, retrieve_with_embedding
+from shared.errors import raise_for_groq_error, require_client
+from shared.llm_client import SetKeyRequest, resolve_model, validate_key
+from shared.pdf_utils import MIN_RELEVANCE_SCORE, chunk_pages, embed_chunks, embed_queries, extract_pages, retrieve_with_embedding
 
 app = FastAPI(title="App 2 – Document Diff Analyzer (RAG)")
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
-client = Groq(api_key=os.environ["GROQ_API_KEY"])
+app.mount("/shared-static", StaticFiles(directory=Path(__file__).parent.parent / "shared" / "static"), name="shared_static")
+
+client = None
+provider = None
+
+
+@app.post("/api/set-key")
+def set_key(body: SetKeyRequest):
+    global client, provider
+    try:
+        client, provider = validate_key(body.provider, body.api_key)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"status": "ok"}
+
 
 _state: dict = {
     "doc_a": {"chunks": [], "filename": "", "page_count": 0},
@@ -31,7 +42,7 @@ _state: dict = {
 }
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
-MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+MODEL = "llama-3.3-70b-versatile"
 
 # Topic queries used to cross-retrieve corresponding sections from both docs
 COMPARISON_TOPICS = [
@@ -143,6 +154,7 @@ def analyze():
         raise HTTPException(400, "Document A not uploaded yet.")
     if not _state["doc_b"]["chunks"]:
         raise HTTPException(400, "Document B not uploaded yet.")
+    require_client(client)
     try:
         return _run_analyze()
     except Exception as e:
@@ -162,7 +174,7 @@ def _run_analyze():
         # Only include topics where both docs have relevant content (score > threshold)
         if not from_a or not from_b:
             continue
-        if from_a[0].score < 0.20 and from_b[0].score < 0.20:
+        if from_a[0].score < MIN_RELEVANCE_SCORE and from_b[0].score < MIN_RELEVANCE_SCORE:
             continue
 
         pages_a = sorted({r.chunk.page for r in from_a})
@@ -204,7 +216,7 @@ def _run_analyze():
     )
 
     response = client.chat.completions.create(
-        model=MODEL,
+        model=resolve_model(provider, MODEL),
         messages=[{"role": "user", "content": prompt}],
         temperature=0,
         response_format={"type": "json_object"},
@@ -221,7 +233,7 @@ def _run_analyze():
             "Return ONLY raw JSON."
         )
         response = client.chat.completions.create(
-            model=MODEL,
+            model=resolve_model(provider, MODEL),
             messages=[{"role": "user", "content": repair_prompt}],
             temperature=0,
             response_format={"type": "json_object"},

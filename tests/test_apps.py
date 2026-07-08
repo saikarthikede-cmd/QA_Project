@@ -1,7 +1,6 @@
 """Smoke tests for each FastAPI app endpoint."""
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -10,10 +9,6 @@ from fastapi.testclient import TestClient
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
-
-# Ensure a key is present so the apps can be imported; tests mock the client anyway.
-if not os.getenv("GROQ_API_KEY"):
-    os.environ["GROQ_API_KEY"] = "dummy-for-tests"
 
 from app1_resume_screener import main as app1_main
 from app2_doc_diff import main as app2_main
@@ -52,7 +47,7 @@ class FakeChat:
         self.completions = completions
 
 
-class FakeGroqClient:
+class FakeLLMClient:
     def __init__(self, response: FakeResponse):
         self.chat = FakeChat(FakeCompletions(response))
 
@@ -89,7 +84,7 @@ def test_app1_upload_and_mock_screen(text_pdf, upload_pdf):
     assert r.status_code == 200
 
     # Mock the Groq client for /screen
-    app1_main.client = FakeGroqClient(
+    app1_main.client = FakeLLMClient(
         FakeResponse(
             '{"score": 90, "recommendation": "Strong Match", '
             '"matched_skills": ["Python", "FastAPI"], "missing_skills": [], '
@@ -119,7 +114,7 @@ def test_app2_upload_and_mock_analyze(text_pdf, upload_pdf):
     r = client.post("/upload-b", files={"file": ("b.pdf", doc_b, "application/pdf")})
     assert r.status_code == 200
 
-    app2_main.client = FakeGroqClient(
+    app2_main.client = FakeLLMClient(
         FakeResponse(
             '{"summary": "Policies updated.", "severity": "Major", "change_count": 2, '
             '"added": [], "removed": [], "modified": [], "unchanged_note": ""}'
@@ -134,7 +129,7 @@ def test_app3_upload_and_mock_generate(text_pdf, upload_pdf):
     client = TestClient(app3_main.app)
     upload_pdf(client, "/upload")
 
-    app3_main.client = FakeGroqClient(
+    app3_main.client = FakeLLMClient(
         FakeResponse(
             '[{"question": "What is the return policy?", "answer": "30 days.", "page": 1}]'
         )
@@ -148,7 +143,7 @@ def test_app3_faq_crud(text_pdf, upload_pdf):
     client = TestClient(app3_main.app)
     upload_pdf(client, "/upload")
 
-    app3_main.client = FakeGroqClient(
+    app3_main.client = FakeLLMClient(
         FakeResponse(
             '[{"question": "Q1", "answer": "A1", "page": 1}, '
             '{"question": "Q2", "answer": "A2", "page": 1}]'
@@ -171,7 +166,7 @@ def test_app4_upload_and_mock_report(text_pdf, upload_pdf):
     client = TestClient(app4_main.app)
     upload_pdf(client, "/upload")
 
-    app4_main.client = FakeGroqClient(
+    app4_main.client = FakeLLMClient(
         FakeResponse(
             "",
             tool_calls=[
@@ -204,7 +199,7 @@ def test_app5_upload_and_mock_triage(text_pdf, upload_pdf):
     client = TestClient(app5_main.app)
     upload_pdf(client, "/upload")
 
-    app5_main.client = FakeGroqClient(
+    app5_main.client = FakeLLMClient(
         FakeResponse(
             '{"decision": "AUTO-RESOLVE", "reason": "Within policy.", '
             '"draft_reply": "Approved.", "policy_pages": [1]}'
@@ -219,7 +214,7 @@ def test_app6_upload_and_mock_analysis(text_pdf, upload_pdf):
     client = TestClient(app6_main.app)
     upload_pdf(client, "/upload")
 
-    app6_main.client = FakeGroqClient(
+    app6_main.client = FakeLLMClient(
         FakeResponse(
             "",
             tool_calls=[
@@ -252,7 +247,7 @@ def test_app6_sandbox_rejects_malicious_code(text_pdf, upload_pdf):
     client = TestClient(app6_main.app)
     upload_pdf(client, "/upload")
 
-    app6_main.client = FakeGroqClient(
+    app6_main.client = FakeLLMClient(
         FakeResponse(
             "",
             tool_calls=[

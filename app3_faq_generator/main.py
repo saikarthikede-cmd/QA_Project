@@ -2,27 +2,38 @@
 Upload any PDF → AI generates Q&A pairs with page citations.
 Users can regenerate individual FAQs, delete them, or request more.
 """
-import os, sys, json, re
+import sys, json, re
 from pathlib import Path
 from typing import List, Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from dotenv import load_dotenv
-load_dotenv(Path(__file__).parent / ".env")
-
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from groq import Groq
 from pydantic import BaseModel
 
-from shared.errors import raise_for_groq_error
-from shared.pdf_utils import build_context, chunk_pages, embed_chunks, extract_pages, retrieve
+from shared.errors import raise_for_groq_error, require_client
+from shared.llm_client import SetKeyRequest, resolve_model, validate_key
+from shared.pdf_utils import build_context, chunk_pages, embed_chunks, extract_pages, is_grounded, retrieve
 
 app = FastAPI(title="App 3 – FAQ Generator")
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
-client = Groq(api_key=os.environ["GROQ_API_KEY"])
+app.mount("/shared-static", StaticFiles(directory=Path(__file__).parent.parent / "shared" / "static"), name="shared_static")
+
+client = None
+provider = None
+
+
+@app.post("/api/set-key")
+def set_key(body: SetKeyRequest):
+    global client, provider
+    try:
+        client, provider = validate_key(body.provider, body.api_key)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"status": "ok"}
+
 
 _state: dict = {"chunks": [], "filename": "", "faqs": []}
 
@@ -108,7 +119,7 @@ def _build_faqs(avoid_questions: Optional[List[str]] = None) -> List[dict]:
     )
 
     response = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
+        model=resolve_model(provider, "llama-3.1-8b-instant"),
         messages=[{"role": "user", "content": prompt}],
         temperature=0.3,
         response_format={"type": "json_object"},
@@ -117,7 +128,7 @@ def _build_faqs(avoid_questions: Optional[List[str]] = None) -> List[dict]:
     if not faqs:
         # Retry once without forced JSON mode
         response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model=resolve_model(provider, "llama-3.1-8b-instant"),
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
         )
@@ -160,6 +171,7 @@ def _safe_build_faqs(avoid_questions: Optional[List[str]] = None) -> List[dict]:
 def generate():
     if not _state["chunks"]:
         raise HTTPException(400, "No PDF uploaded yet.")
+    require_client(client)
     faqs = _safe_build_faqs()
     if not faqs:
         raise HTTPException(500, "Failed to generate FAQs. Try again.")
@@ -171,6 +183,7 @@ def generate():
 def generate_more():
     if not _state["chunks"]:
         raise HTTPException(400, "No PDF uploaded yet.")
+    require_client(client)
     existing_qs = [f["question"] for f in _state["faqs"]]
     new_faqs = _safe_build_faqs(avoid_questions=existing_qs)
     _state["faqs"].extend(new_faqs)
@@ -184,6 +197,7 @@ def regenerate_one(body: RegenerateRequest):
     idx = body.index
     if idx < 0 or idx >= len(_state["faqs"]):
         raise HTTPException(400, f"Invalid index {idx}.")
+    require_client(client)
     avoid = [f["question"] for i, f in enumerate(_state["faqs"]) if i != idx]
     new_faqs = _safe_build_faqs(avoid_questions=avoid)
     if not new_faqs:
@@ -213,8 +227,9 @@ def ask(body: AskRequest):
         raise HTTPException(400, "Question cannot be empty.")
 
     results = retrieve(body.question, _state["chunks"], top_k=3)
-    if not results:
+    if not is_grounded(results):
         return {"answer": "No relevant content found in the document.", "pages": []}
+    require_client(client)
 
     context = build_context(results)[:1200]
     prompt = (
@@ -234,7 +249,7 @@ def ask(body: AskRequest):
 
 def _ask_groq(prompt: str):
     return client.chat.completions.create(
-        model="llama-3.1-8b-instant",
+        model=resolve_model(provider, "llama-3.1-8b-instant"),
         messages=[{"role": "user", "content": prompt}],
         temperature=0,
     )
