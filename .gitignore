@@ -31,9 +31,6 @@ logs/*.log
 logs/*.log.err
 *.log
 
-# Test / local outputs
-test_pdfs/
-
 # OS files
 .DS_Store
 Thumbs.db
