@@ -294,14 +294,14 @@ function openApp(id, port, name, icon){
   _currentPort = port;
   document.getElementById('dashboard').style.display='none';
   document.getElementById('frame-wrapper').classList.add('visible');
-  document.getElementById('app-frame').src=`http://localhost:${port}/`;
+  document.getElementById('app-frame').src=`http://${window.location.hostname}:${port}/`;
   document.getElementById('crumb-label').textContent=`${icon} ${name}`;
   document.getElementById('openTabBtn').classList.remove('hidden');
   setActiveNav('nav-'+id);
 }
 
 function openCurrentInTab(){
-  if(_currentPort) window.open(`http://localhost:${_currentPort}/`,'_blank');
+  if(_currentPort) window.open(`http://${window.location.hostname}:${_currentPort}/`,'_blank');
 }
 
 function setActiveNav(activeId){
@@ -345,6 +345,13 @@ function renderStatusBar(up,down){
   if(down>0) pills.push(`<span class="status-pill"><span class="dot" style="background:#ef4444;border-radius:50%;width:7px;height:7px;display:inline-block"></span> ${down} offline</span>`);
   document.getElementById('statusBar').innerHTML=pills.join('');
 }
+
+// Card labels say "localhost:PORT" in the HTML source, but that's only
+// correct when the browser and the containers are on the same machine —
+// once this is hosted for others, show whatever host they actually used.
+document.querySelectorAll('.card-port').forEach(el=>{
+  el.textContent=el.textContent.replace('localhost',window.location.hostname);
+});
 
 // Auto-check on load
 checkStatus();
