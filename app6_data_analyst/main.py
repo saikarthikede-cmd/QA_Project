@@ -2,7 +2,7 @@
 Upload a PDF with tables/numbers → ask data questions → agent extracts data,
 writes Python to compute, self-corrects on failure, returns result with page citation.
 """
-import sys, json
+import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -10,10 +10,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from openai import BadRequestError
+from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel
 
 from shared.errors import raise_for_groq_error, require_client
+from shared.llm_agent import run_tool_calling_agent
 from shared.llm_client import SetKeyRequest, resolve_model, validate_key
 from shared.pdf_utils import build_context, chunk_pages, embed_chunks, extract_pages, retrieve
 from shared.safe_exec import run_sandboxed_python
@@ -193,104 +194,43 @@ def _run_analysis(body: AnalysisRequest):
             f"Q: {h['question']}\nA: {h['answer'][:200]}" for h in recent
         )
 
-    messages = [
-        {"role": "system", "content": system + history_context},
-        {"role": "user", "content": body.question},
+    initial_messages = [
+        SystemMessage(content=system + history_context),
+        HumanMessage(content=body.question),
     ]
 
-    agent_steps = []
+    def is_python_error(name: str, result: str) -> bool:
+        return name == "run_python" and result.startswith("ERROR")
+
+    result = run_tool_calling_agent(
+        client,
+        model=resolve_model(provider, "llama-3.1-8b-instant"),
+        initial_messages=initial_messages,
+        tools=TOOLS,
+        run_tool=run_tool,
+        max_iterations=12,
+        max_tool_calls_per_turn=3,  # small models can hallucinate dozens of calls in one turn
+        max_total_tool_calls=12,
+        max_context_turns=4,
+        is_error=is_python_error,
+        max_error_retries=MAX_RETRIES,
+        escalation_message="Python execution failed too many times. Provide the best answer you can from the retrieved data without running code.",
+    )
+
+    # Recompute a numbered "retry" count per error step for the frontend's
+    # retry badge — the shared executor tracks an error streak internally
+    # but doesn't expose a per-step number (only this app's UI needs it).
     python_retries = 0
-    total_tool_calls = 0
-    MAX_TOOL_CALLS_PER_TURN = 3   # small models can hallucinate dozens of calls in one turn
-    MAX_TOTAL_TOOL_CALLS = 12
+    for step in result.agent_steps:
+        python_retries = python_retries + 1 if step["error"] else 0
+        step["retry"] = python_retries
 
-    opening = messages[:1]  # system message, fixed
-    # Turn-grouped history: each entry is [assistant_msg, tool_msg, tool_msg, ...]
-    # (or a lone user/assistant message). The chat API requires an assistant
-    # message that issues tool_calls to stay adjacent to its tool responses —
-    # trimming by turn keeps that pairing intact, unlike slicing a flat list
-    # of messages by raw count.
-    turns: list[list[dict]] = [[messages[1]]]
-    MAX_CONTEXT_TURNS = 4
-
-    for _ in range(12):
-        if total_tool_calls >= MAX_TOTAL_TOOL_CALLS:
-            break
-
-        current_messages = opening + [m for turn in turns[-MAX_CONTEXT_TURNS:] for m in turn]
-        try:
-            response = client.chat.completions.create(
-                model=resolve_model(provider, "llama-3.1-8b-instant"),
-                messages=current_messages,
-                tools=TOOLS,
-                tool_choice="auto",
-                temperature=0,
-            )
-        except BadRequestError:
-            # Model produced a malformed tool call — stop looping, answer from what we have
-            break
-        msg = response.choices[0].message
-        tool_calls = (msg.tool_calls or [])[:MAX_TOOL_CALLS_PER_TURN]
-
-        # Build serializable message dict
-        msg_dict = {"role": "assistant", "content": msg.content}
-        if tool_calls:
-            msg_dict["tool_calls"] = [
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                }
-                for tc in tool_calls
-            ]
-        current_turn = [msg_dict]
-
-        if not tool_calls:
-            answer = msg.content or "No answer produced."
-            _state["history"].append({"question": body.question, "answer": answer})
-            _state["history"] = _state["history"][-10:]
-            return {
-                "answer": answer,
-                "agent_steps": agent_steps,
-            }
-
-        for tc in tool_calls:
-            fn_name = tc.function.name
-            try:
-                fn_args = json.loads(tc.function.arguments)
-            except Exception:
-                current_turn.append({"role": "tool", "tool_call_id": tc.id,
-                                      "content": "ERROR: malformed tool arguments — retry with valid JSON."})
-                continue
-            result = run_tool(fn_name, fn_args)
-            total_tool_calls += 1
-
-            is_error = fn_name == "run_python" and result.startswith("ERROR")
-            if is_error:
-                python_retries += 1
-
-            agent_steps.append({
-                "tool": fn_name,
-                "input": fn_args,
-                "output": result[:400],
-                "error": is_error,
-                "retry": python_retries if is_error else 0,
-            })
-
-            current_turn.append({
-                "role": "tool",
-                "tool_call_id": tc.id,
-                "content": result,
-            })
-
-            if is_error and python_retries >= MAX_RETRIES:
-                current_turn.append({
-                    "role": "user",
-                    "content": "Python execution failed too many times. Provide the best answer you can from the retrieved data without running code.",
-                })
-
-        turns.append(current_turn)
+    if result.converged:
+        answer = result.content or "No answer produced."
+        _state["history"].append({"question": body.question, "answer": answer})
+        _state["history"] = _state["history"][-10:]
+        return {"answer": answer, "agent_steps": result.agent_steps}
 
     final_answer = "Agent did not converge in time. Try a simpler/more specific question."
     _state["history"].append({"question": body.question, "answer": final_answer})
-    return {"answer": final_answer, "agent_steps": agent_steps}
+    return {"answer": final_answer, "agent_steps": result.agent_steps}

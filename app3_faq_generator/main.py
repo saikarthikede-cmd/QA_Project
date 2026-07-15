@@ -11,9 +11,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 
 from shared.errors import raise_for_groq_error, require_client
+from shared.llm_agent import run_tool_calling_agent
 from shared.llm_client import SetKeyRequest, resolve_model, validate_key
 from shared.pdf_utils import build_context, chunk_pages, embed_chunks, extract_pages, is_grounded, retrieve
 
@@ -49,6 +51,35 @@ COVERAGE_QUERIES = [
     "contact support help escalation",
     "timeline deadlines dates duration",
 ]
+
+SEARCH_TOOL = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_document",
+            "description": (
+                "Search the document for additional content on a specific topic before finalizing "
+                "the FAQ list. Use if the provided context doesn't cover enough distinct topics for "
+                "12 diverse Q&A pairs."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string", "description": "What topic to search for in the document"}},
+                "required": ["query"],
+            },
+        },
+    }
+]
+
+
+def run_tool(name: str, args: dict) -> str:
+    if name == "search_document":
+        query = str(args.get("query", ""))[:300]
+        results = retrieve(query, _state["chunks"], top_k=3)
+        if not results:
+            return "No relevant content found for this query."
+        return build_context(results)
+    return "Unknown tool."
 
 
 class RegenerateRequest(BaseModel):
@@ -118,21 +149,17 @@ def _build_faqs(avoid_questions: Optional[List[str]] = None) -> List[dict]:
         'Return ONLY a raw JSON object of the form {"faqs": [...]}, no markdown.'
     )
 
-    response = client.chat.completions.create(
-        model=resolve_model(provider, "llama-3.1-8b-instant"),
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
-        response_format={"type": "json_object"},
+    model = resolve_model(provider, "llama-3.1-8b-instant")
+    agent_result = run_tool_calling_agent(
+        client, model=model, initial_messages=[HumanMessage(content=prompt)],
+        tools=SEARCH_TOOL, run_tool=run_tool,
+        max_iterations=4, max_tool_calls_per_turn=2, max_total_tool_calls=4,
     )
-    faqs = _parse_faq_list(response.choices[0].message.content.strip())
+    faqs = _parse_faq_list(agent_result.content.strip()) if agent_result.converged and agent_result.content else []
     if not faqs:
-        # Retry once without forced JSON mode
-        response = client.chat.completions.create(
-            model=resolve_model(provider, "llama-3.1-8b-instant"),
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-        )
-        faqs = _parse_faq_list(response.choices[0].message.content.strip())
+        # Retry once with a plain direct call
+        retry = client.bind(model=model, temperature=0.3).invoke([HumanMessage(content=prompt)])
+        faqs = _parse_faq_list(retry.content.strip())
     return faqs
 
 
@@ -244,13 +271,11 @@ def ask(body: AskRequest):
     except Exception as e:
         raise_for_groq_error(e)
     pages = sorted({r.chunk.page for r in results})
-    return {"answer": response.choices[0].message.content.strip(), "pages": pages}
+    return {"answer": response.content.strip(), "pages": pages}
 
 
 def _ask_groq(prompt: str):
-    return client.chat.completions.create(
-        model=resolve_model(provider, "llama-3.1-8b-instant"),
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0,
+    return client.bind(model=resolve_model(provider, "llama-3.1-8b-instant"), temperature=0).invoke(
+        [HumanMessage(content=prompt)]
     )
 

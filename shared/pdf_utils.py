@@ -1,4 +1,11 @@
-"""Shared PDF parsing, chunking, embedding, and retrieval utilities."""
+"""Shared PDF parsing, chunking, embedding, and retrieval utilities.
+
+Retrieval routes through LangChain's InMemoryVectorStore for the similarity
+search step (same cosine-similarity math as before — verified equivalent),
+while embeddings themselves still come from the local sentence-transformers
+model via a thin LangChain Embeddings wrapper, so the model is loaded once
+per process exactly as before.
+"""
 from __future__ import annotations
 
 import io
@@ -6,6 +13,8 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 import numpy as np
+from langchain_core.embeddings import Embeddings
+from langchain_core.vectorstores import InMemoryVectorStore
 from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
 
@@ -29,6 +38,22 @@ def get_model() -> SentenceTransformer:
     if _MODEL is None:
         _MODEL = SentenceTransformer("all-MiniLM-L6-v2")
     return _MODEL
+
+
+class _SentenceTransformerEmbeddings(Embeddings):
+    """Thin LangChain Embeddings wrapper around the local sentence-transformers
+    model, so retrieval can go through LangChain's vectorstore API without
+    switching embedding models or adding a network-dependent embedder."""
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        model = get_model()
+        return model.encode(texts, show_progress_bar=False, convert_to_numpy=True).tolist()
+
+    def embed_query(self, text: str) -> List[float]:
+        return self.embed_documents([text])[0]
+
+
+_EMBEDDINGS = _SentenceTransformerEmbeddings()
 
 
 # ---------------------------------------------------------------------------
@@ -105,22 +130,20 @@ def chunk_pages(
 # ---------------------------------------------------------------------------
 
 def embed_chunks(chunks: List[Chunk]) -> List[Chunk]:
-    model = get_model()
     texts = [c.text for c in chunks]
-    embeddings = model.encode(texts, show_progress_bar=False, convert_to_numpy=True)
+    embeddings = _EMBEDDINGS.embed_documents(texts)
     for chunk, emb in zip(chunks, embeddings):
-        chunk.embedding = emb
+        chunk.embedding = np.array(emb)
     return chunks
 
 
 def embed_query(query: str) -> np.ndarray:
-    return embed_queries([query])[0]
+    return np.array(_EMBEDDINGS.embed_query(query))
 
 
 def embed_queries(queries: List[str]) -> np.ndarray:
     """Batch-encode multiple queries in a single model call."""
-    model = get_model()
-    return model.encode(queries, show_progress_bar=False, convert_to_numpy=True)
+    return np.array(_EMBEDDINGS.embed_documents(queries))
 
 
 # ---------------------------------------------------------------------------
@@ -151,14 +174,34 @@ def retrieve_with_embedding(
     top_k: int = TOP_K,
 ) -> List[RetrievedChunk]:
     """Same as retrieve(), but for a query already embedded (batch-encode many
-    queries once with embed_queries() and reuse each vector across calls)."""
-    scored = [
-        RetrievedChunk(chunk=c, score=cosine_similarity(query_embedding, c.embedding))
-        for c in chunks
-        if c.embedding is not None
+    queries once with embed_queries() and reuse each vector across calls).
+
+    Builds a fresh InMemoryVectorStore per call, populated directly from each
+    chunk's already-computed embedding (bypassing add_texts/add_documents,
+    which would otherwise re-run the embedding model on every retrieval) —
+    this is cheap dict bookkeeping, not re-embedding, so performance matches
+    the previous hand-rolled cosine loop.
+    """
+    embedded = [c for c in chunks if c.embedding is not None]
+    if not embedded:
+        return []
+
+    store = InMemoryVectorStore(embedding=_EMBEDDINGS)
+    for i, c in enumerate(embedded):
+        doc_id = str(i)
+        store.store[doc_id] = {
+            "id": doc_id,
+            "vector": c.embedding.tolist(),
+            "text": c.text,
+            "metadata": {"_chunk_index": i},
+        }
+
+    q_vec = query_embedding.tolist() if hasattr(query_embedding, "tolist") else list(query_embedding)
+    results = store.similarity_search_with_score_by_vector(q_vec, k=top_k)
+    return [
+        RetrievedChunk(chunk=embedded[doc.metadata["_chunk_index"]], score=score)
+        for doc, score in results
     ]
-    scored.sort(key=lambda x: x.score, reverse=True)
-    return scored[:top_k]
 
 
 # ---------------------------------------------------------------------------

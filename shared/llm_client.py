@@ -1,16 +1,20 @@
 """Lets each app's user supply their own Groq or OpenAI key at runtime via a
 popup, instead of a key baked into .env. Both providers are called through
-the `openai` SDK — Groq exposes an OpenAI-compatible endpoint, so one client
-shape covers chat completions, tool calling, and JSON mode for either.
+LangChain's ChatOpenAI — Groq exposes an OpenAI-compatible endpoint, so one
+client shape covers chat completions, tool calling, and JSON mode for either.
+Every call site overrides the model per-call via `.bind(model=...)` since
+different apps/tiers need different models from the same client.
 """
 from __future__ import annotations
 
 from typing import Optional, Tuple
 
 import openai
+from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
 
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+GROQ_DEFAULT_MODEL = "llama-3.3-70b-versatile"
 OPENAI_DEFAULT_MODEL = "gpt-4o-mini"
 DISPLAY_NAME = {"groq": "Groq", "openai": "OpenAI"}
 
@@ -20,8 +24,9 @@ class SetKeyRequest(BaseModel):
     api_key: str
 
 
-def validate_key(provider: str, api_key: str) -> Tuple[openai.OpenAI, str]:
-    """Build a client for `provider` and confirm the key actually works.
+def validate_key(provider: str, api_key: str) -> Tuple[ChatOpenAI, str]:
+    """Build a LangChain ChatOpenAI client for `provider` and confirm the key
+    actually works.
 
     Raises ValueError (safe to show the user) on a bad provider, empty key,
     rejected key, or unreachable API.
@@ -33,14 +38,16 @@ def validate_key(provider: str, api_key: str) -> Tuple[openai.OpenAI, str]:
     if not api_key:
         raise ValueError("API key is required.")
 
-    client = openai.OpenAI(
+    client = ChatOpenAI(
+        model=GROQ_DEFAULT_MODEL if provider == "groq" else OPENAI_DEFAULT_MODEL,
         api_key=api_key,
         base_url=GROQ_BASE_URL if provider == "groq" else None,
         timeout=30.0,
+        temperature=0,
     )
     name = DISPLAY_NAME[provider]
     try:
-        client.models.list()  # cheap real call — fails fast on a bad/revoked key
+        client.root_client.models.list()  # cheap real call — fails fast on a bad/revoked key
     except openai.AuthenticationError:
         raise ValueError(f"{name} rejected this key — check it and try again.")
     except openai.APIConnectionError:

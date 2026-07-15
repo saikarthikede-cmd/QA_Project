@@ -12,11 +12,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from langchain_core.messages import HumanMessage
 from pypdf import PdfReader
 
 from shared.errors import raise_for_groq_error, require_client
+from shared.llm_agent import run_tool_calling_agent
 from shared.llm_client import SetKeyRequest, resolve_model, validate_key
-from shared.pdf_utils import MIN_RELEVANCE_SCORE, chunk_pages, embed_chunks, embed_queries, extract_pages, retrieve_with_embedding
+from shared.pdf_utils import MIN_RELEVANCE_SCORE, build_context, chunk_pages, embed_chunks, embed_queries, extract_pages, retrieve, retrieve_with_embedding
 
 app = FastAPI(title="App 2 – Document Diff Analyzer (RAG)")
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
@@ -43,6 +45,41 @@ _state: dict = {
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 MODEL = "llama-3.3-70b-versatile"
+
+SEARCH_TOOL = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_document",
+            "description": (
+                "Search either document for additional context on a specific topic before "
+                "finalizing the comparison. Use if the paired sections provided aren't enough "
+                "to judge a specific difference."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "doc": {"type": "string", "description": "Which document to search: 'A' or 'B'"},
+                    "query": {"type": "string", "description": "What to search for"},
+                },
+                "required": ["doc", "query"],
+            },
+        },
+    }
+]
+
+
+def run_tool(name: str, args: dict) -> str:
+    if name == "search_document":
+        doc_label = str(args.get("doc", "")).strip().upper()
+        doc_key = "doc_a" if doc_label == "A" else "doc_b"
+        query = str(args.get("query", ""))[:300]
+        results = retrieve(query, _state[doc_key]["chunks"], top_k=3)
+        if not results:
+            return f"No relevant content found in Document {doc_label or '?'}."
+        return build_context(results)
+    return "Unknown tool."
+
 
 # Topic queries used to cross-retrieve corresponding sections from both docs
 COMPARISON_TOPICS = [
@@ -215,14 +252,14 @@ def _run_analyze():
         "- Return ONLY raw JSON."
     )
 
-    response = client.chat.completions.create(
-        model=resolve_model(provider, MODEL),
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0,
-        response_format={"type": "json_object"},
+    model = resolve_model(provider, MODEL)
+    agent_result = run_tool_calling_agent(
+        client, model=model, initial_messages=[HumanMessage(content=prompt)],
+        tools=SEARCH_TOOL, run_tool=run_tool,
+        max_iterations=5, max_tool_calls_per_turn=2, max_total_tool_calls=6,
     )
-    raw = response.choices[0].message.content.strip()
-    data = _parse_json(raw)
+    raw = (agent_result.content or "").strip() if agent_result.converged else ""
+    data = _parse_json(raw) if raw else {}
     if not _is_valid_analysis(data):
         repair_prompt = (
             "Your previous answer was not a valid document diff JSON object.\n"
@@ -232,13 +269,10 @@ def _run_analyze():
             f"{full_context}\n\n"
             "Return ONLY raw JSON."
         )
-        response = client.chat.completions.create(
-            model=resolve_model(provider, MODEL),
-            messages=[{"role": "user", "content": repair_prompt}],
-            temperature=0,
-            response_format={"type": "json_object"},
+        response = client.bind(model=model, temperature=0, response_format={"type": "json_object"}).invoke(
+            [HumanMessage(content=repair_prompt)]
         )
-        data = _parse_json(response.choices[0].message.content.strip())
+        data = _parse_json(response.content.strip())
     if not _is_valid_analysis(data):
         raise HTTPException(502, "The AI returned an invalid diff analysis. Please retry; no fake result was shown.")
 

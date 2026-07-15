@@ -11,10 +11,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 from typing import List
 
 from shared.errors import raise_for_groq_error, require_client
+from shared.llm_agent import run_tool_calling_agent
 from shared.llm_client import SetKeyRequest, resolve_model, validate_key
 from shared.pdf_utils import build_context, chunk_pages, embed_chunks, extract_pages, is_grounded, retrieve
 
@@ -52,7 +54,9 @@ class AskRequest(BaseModel):
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
-# Fixed JD-screening queries used to retrieve evidence from each resume
+# Fixed JD-screening queries used to pre-fetch evidence from each resume,
+# covering the topics that matter for almost any role — the agent below can
+# still call search_resume_evidence for anything this baseline misses.
 SCREEN_QUERIES = [
     "years of professional experience",
     "programming languages frameworks libraries",
@@ -65,6 +69,38 @@ SCREEN_QUERIES = [
     "testing CI CD quality engineering",
     "communication collaboration cross-functional",
 ]
+
+SEARCH_TOOL = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_resume_evidence",
+            "description": (
+                "Search this candidate's resume for evidence about a specific skill, requirement, or "
+                "topic before finalizing your score. Use this if the evidence already provided isn't "
+                "enough to judge a particular JD requirement."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string", "description": "What to search for in the resume"}},
+                "required": ["query"],
+            },
+        },
+    }
+]
+
+
+def _make_resume_search_tool(resume_chunks: List):
+    def run_tool(name: str, args: dict) -> str:
+        if name == "search_resume_evidence":
+            query = str(args.get("query", ""))[:300]
+            results = retrieve(query, resume_chunks, top_k=3)
+            if not results:
+                return "No relevant evidence found for this query."
+            return build_context(results)
+        return "Unknown tool."
+
+    return run_tool
 
 
 def _parse_json(content: str) -> dict | list:
@@ -183,11 +219,14 @@ def _run_screen():
         semantic_score = round(sum(r.score for r in evidence) / len(evidence) * 100, 1) if evidence else 0.0
 
         prompt = (
-            "You are a strict recruiting assistant. Score this candidate ONLY based on the retrieved "
-            "resume evidence provided below. Do NOT invent or assume skills not present in the evidence.\n\n"
+            "You are a strict recruiting assistant agent. Score this candidate ONLY based on retrieved "
+            "resume evidence. Do NOT invent or assume skills not present in the evidence.\n\n"
             f"JOB DESCRIPTION CONTEXT (from {_state['jd_filename']}):\n{jd_context}\n\n"
             f"RETRIEVED RESUME EVIDENCE (from {filename}, pages {cited_pages}):\n{resume_context}\n\n"
-            "Based ONLY on the above evidence, return a JSON object with exactly:\n"
+            "If this evidence is insufficient to judge a specific JD requirement, call "
+            "search_resume_evidence with a targeted query before answering — otherwise answer directly.\n\n"
+            "Based ONLY on the evidence (including anything you additionally retrieve), return a JSON "
+            "object with exactly:\n"
             "- score: integer 0-100\n"
             "- recommendation: 'Strong Match', 'Possible Match', or 'Not Suitable'\n"
             "- matched_skills: list of strings (skills found in the resume evidence that match the JD)\n"
@@ -199,21 +238,17 @@ def _run_screen():
             "Return ONLY raw JSON."
         )
 
-        response = client.chat.completions.create(
-            model=resolve_model(provider, "llama-3.1-8b-instant"),
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-            response_format={"type": "json_object"},
+        model = resolve_model(provider, "llama-3.1-8b-instant")
+        agent_result = run_tool_calling_agent(
+            client, model=model, initial_messages=[HumanMessage(content=prompt)],
+            tools=SEARCH_TOOL, run_tool=_make_resume_search_tool(resume_chunks),
+            max_iterations=4, max_tool_calls_per_turn=2, max_total_tool_calls=4,
         )
-        data = _parse_json(response.choices[0].message.content.strip())
+        data = _parse_json(agent_result.content.strip()) if agent_result.converged and agent_result.content else {}
         if not data or "score" not in data:
-            # Retry once without forced JSON mode before giving up
-            response = client.chat.completions.create(
-                model=resolve_model(provider, "llama-3.1-8b-instant"),
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0,
-            )
-            data = _parse_json(response.choices[0].message.content.strip())
+            # Retry once with a plain direct call before giving up
+            retry = client.bind(model=model, temperature=0).invoke([HumanMessage(content=prompt)])
+            data = _parse_json(retry.content.strip())
         if not data or "score" not in data:
             # Honest failure — never silently score a real candidate as 0
             data = {
@@ -291,15 +326,13 @@ def ask(body: AskRequest):
     )
 
     try:
-        response = client.chat.completions.create(
-            model=resolve_model(provider, "llama-3.1-8b-instant"),
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
+        response = client.bind(model=resolve_model(provider, "llama-3.1-8b-instant"), temperature=0).invoke(
+            [HumanMessage(content=prompt)]
         )
     except Exception as e:
         raise_for_groq_error(e)
 
-    answer = response.choices[0].message.content.strip()
+    answer = response.content.strip()
     pages = sorted({r.chunk.page for r in results})
 
     _state["chat_history"].append({"question": body.question, "answer": answer})

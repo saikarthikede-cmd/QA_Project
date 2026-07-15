@@ -11,10 +11,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from openai import BadRequestError
+from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 
 from shared.errors import raise_for_groq_error, require_client
+from shared.llm_agent import run_tool_calling_agent
 from shared.llm_client import SetKeyRequest, resolve_model, validate_key
 from shared.pdf_utils import build_context, chunk_pages, embed_chunks, extract_pages, is_grounded, retrieve
 
@@ -214,59 +215,27 @@ MAX_TOTAL_TOOL_CALLS = 20  # 5 sections x (>=1 retrieve + 1 write), with slack
 
 
 def _run_agent():
-    messages = [{"role": "user", "content": AGENT_SYSTEM_PROMPT_TEMPLATE.format(filename=_state["filename"])}]
     report_sections: dict = {}
-    steps = []
-    total_tool_calls = 0
 
-    for _ in range(15):
-        if total_tool_calls >= MAX_TOTAL_TOOL_CALLS:
-            break
-        try:
-            response = client.chat.completions.create(
-                model=resolve_model(provider, MODEL),
-                messages=messages,
-                tools=TOOLS,
-                tool_choice="auto",
-                temperature=0,
-            )
-        except BadRequestError:
-            break
-        msg = response.choices[0].message
-        tool_calls = (msg.tool_calls or [])[:MAX_TOOL_CALLS_PER_TURN]
+    def run_tool_bound(name: str, args: dict) -> str:
+        return run_tool(name, args, report_sections)
 
-        msg_dict = {"role": "assistant", "content": msg.content}
-        if tool_calls:
-            msg_dict["tool_calls"] = [
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                }
-                for tc in tool_calls
-            ]
-        messages.append(msg_dict)
+    initial_messages = [HumanMessage(content=AGENT_SYSTEM_PROMPT_TEMPLATE.format(filename=_state["filename"]))]
+    model = resolve_model(provider, MODEL)
 
-        if not tool_calls:
-            break
+    result = run_tool_calling_agent(
+        client, model=model, initial_messages=initial_messages, tools=TOOLS, run_tool=run_tool_bound,
+        max_iterations=15, max_tool_calls_per_turn=MAX_TOOL_CALLS_PER_TURN, max_total_tool_calls=MAX_TOTAL_TOOL_CALLS,
+        stop_when=lambda: len(report_sections) >= len(REPORT_SECTIONS),
+    )
 
-        for tc in tool_calls:
-            try:
-                fn_args = json.loads(tc.function.arguments)
-            except Exception:
-                messages.append({"role": "tool", "tool_call_id": tc.id,
-                                  "content": "ERROR: malformed tool arguments — retry with valid JSON."})
-                continue
-            result = run_tool(tc.function.name, fn_args, report_sections)
-            total_tool_calls += 1
-            steps.append({"tool": tc.function.name, "section": fn_args.get("section", fn_args.get("title", ""))})
-            messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
-
-        if len(report_sections) >= len(REPORT_SECTIONS):
-            break
+    steps = [
+        {"tool": s["tool"], "section": s["input"].get("section", s["input"].get("title", ""))}
+        for s in result.agent_steps
+    ]
 
     if not report_sections:
-        # The model never engaged with the tools (or hit BadRequestError immediately) —
+        # The model never engaged with the tools (or hit a safety cap immediately) —
         # fall back to a single grounded completion over upfront-retrieved evidence
         # rather than showing nothing.
         evidence = _build_report_evidence()
@@ -284,13 +253,10 @@ def _run_agent():
             '"recommendations":{"label":"Recommendations","content":"...","pages":[1]},'
             '"risks_challenges":{"label":"Risks & Challenges","content":"...","pages":[1]}}}'
         )
-        response = client.chat.completions.create(
-            model=resolve_model(provider, MODEL),
-            messages=[{"role": "user", "content": fallback_prompt}],
-            temperature=0,
-            response_format={"type": "json_object"},
+        response = client.bind(model=model, temperature=0, response_format={"type": "json_object"}).invoke(
+            [HumanMessage(content=fallback_prompt)]
         )
-        parsed = _parse_report_json(response.choices[0].message.content or "")
+        parsed = _parse_report_json(response.content or "")
         report_sections = parsed.get("report", {}) if isinstance(parsed, dict) else {}
         for section in report_sections.values():
             steps.append({"tool": "write_section", "section": section.get("label", "")})
@@ -336,14 +302,12 @@ def chat(body: ChatRequest):
     )
 
     try:
-        response = client.chat.completions.create(
-            model=resolve_model(provider, "llama-3.1-8b-instant"),
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
+        response = client.bind(model=resolve_model(provider, "llama-3.1-8b-instant"), temperature=0).invoke(
+            [HumanMessage(content=prompt)]
         )
     except Exception as e:
         raise_for_groq_error(e)
-    answer = response.choices[0].message.content.strip()
+    answer = response.content.strip()
     pages = sorted({r.chunk.page for r in results})
 
     _state["chat_history"].append({"question": body.question, "answer": answer})

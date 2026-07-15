@@ -10,10 +10,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from openai import BadRequestError
+from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel
 
 from shared.errors import raise_for_groq_error, require_client
+from shared.llm_agent import run_tool_calling_agent
 from shared.llm_client import SetKeyRequest, resolve_model, validate_key
 from shared.pdf_utils import build_context, chunk_pages, embed_chunks, extract_pages, is_grounded, retrieve
 
@@ -227,119 +228,77 @@ def _run_triage(body: TriageRequest):
         "reason, draft_reply, policy_pages."
     )
 
-    messages = [
-        {"role": "system", "content": system},
-        {"role": "user", "content": f"Support ticket:\n\n{body.ticket}"},
+    initial_messages = [
+        SystemMessage(content=system),
+        HumanMessage(content=f"Support ticket:\n\n{body.ticket}"),
     ]
 
-    agent_steps = []
-    total_tool_calls = 0
-    MAX_TOOL_CALLS_PER_TURN = 3
-    MAX_TOTAL_TOOL_CALLS = 12
+    model = resolve_model(provider, "llama-3.1-8b-instant")
+    result = run_tool_calling_agent(
+        client, model=model, initial_messages=initial_messages, tools=TOOLS, run_tool=run_tool,
+        max_iterations=10, max_tool_calls_per_turn=3, max_total_tool_calls=12,
+    )
 
-    # Agentic loop with tool calls
-    for _ in range(10):  # max 10 iterations — more tools means more turns
-        if total_tool_calls >= MAX_TOTAL_TOOL_CALLS:
-            break
+    # app5's UI expects {"tool", "query", "result_preview"} per step, not the
+    # executor's generic {"tool", "input", "output", "error"}.
+    agent_steps = [
+        {
+            "tool": s["tool"],
+            "query": s["input"].get("query") or s["input"].get("issue_type") or s["input"].get("reason") or s["input"].get("text", "")[:60],
+            "result_preview": s["output"][:200],
+        }
+        for s in result.agent_steps
+    ]
 
+    if not result.converged:
+        return {"decision": "ESCALATE", "reason": "Agent could not reach a conclusion.", "draft_reply": "", "policy_pages": [], "agent_steps": agent_steps}
+
+    def _try_json(raw: str):
         try:
-            response = client.chat.completions.create(
-                model=resolve_model(provider, "llama-3.1-8b-instant"),
-                messages=messages,
-                tools=TOOLS,
-                tool_choice="auto",
-                temperature=0,
-            )
-        except BadRequestError:
-            # Model generated pathologically long tool arguments — fall back to final answer
-            break
-        msg = response.choices[0].message
-        tool_calls = (msg.tool_calls or [])[:MAX_TOOL_CALLS_PER_TURN]
+            return json.loads(raw)
+        except Exception:
+            pass
+        try:
+            return json.loads(re.sub(r",\s*([}\]])", r"\1", raw))
+        except Exception:
+            return None
 
-        # Build serializable assistant message dict
-        msg_dict = {"role": "assistant", "content": msg.content}
-        if tool_calls:
-            msg_dict["tool_calls"] = [
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                }
-                for tc in tool_calls
-            ]
-        messages.append(msg_dict)
+    content = result.content or ""
+    clean = content
+    if "```" in clean:
+        m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", clean, re.DOTALL)
+        if m:
+            clean = m.group(1)
+    start = clean.find("{")
+    end = clean.rfind("}") + 1
+    parsed = _try_json(clean[start:end]) if start != -1 else None
 
-        if not tool_calls:
-            # Final answer — ask for clean JSON if needed
-            content = msg.content or ""
-            result = None
-            # Strip markdown code fences if present
-            clean = content
-            if "```" in clean:
-                m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", clean, re.DOTALL)
-                if m:
-                    clean = m.group(1)
+    if not parsed or "decision" not in parsed:
+        # Re-prompt for structured JSON, with the full tool-call trace still
+        # in context — a single direct call, no tools, no loop.
+        reprompt = result.messages + [HumanMessage(
+            content="Now return your final answer as a JSON object with keys: decision, reason, draft_reply, policy_pages. No markdown, raw JSON only."
+        )]
+        r2 = client.bind(model=model, temperature=0, response_format={"type": "json_object"}).invoke(reprompt)
+        content2 = r2.content or ""
+        s = content2.find("{"); e = content2.rfind("}") + 1
+        parsed = _try_json(content2[s:e]) if s != -1 else None
 
-            def _try_json(raw: str):
-                try:
-                    return json.loads(raw)
-                except Exception:
-                    pass
-                try:
-                    return json.loads(re.sub(r",\s*([}\]])", r"\1", raw))
-                except Exception:
-                    return None
+    if not parsed or "decision" not in parsed:
+        parsed = {"decision": "ESCALATE",
+                  "reason": "The AI response could not be parsed — escalating to a human by default.",
+                  "draft_reply": "", "policy_pages": []}
 
-            start = clean.find("{")
-            end = clean.rfind("}") + 1
-            if start != -1:
-                result = _try_json(clean[start:end])
-            if not result or "decision" not in result:
-                # Re-prompt for structured JSON
-                messages.append({"role": "user", "content": "Now return your final answer as a JSON object with keys: decision, reason, draft_reply, policy_pages. No markdown, raw JSON only."})
-                r2 = client.chat.completions.create(
-                    model=resolve_model(provider, "llama-3.1-8b-instant"), messages=messages, temperature=0,
-                    response_format={"type": "json_object"},
-                )
-                content2 = r2.choices[0].message.content or ""
-                s = content2.find("{"); e = content2.rfind("}") + 1
-                result = _try_json(content2[s:e]) if s != -1 else None
-            if not result or "decision" not in result:
-                result = {"decision": "ESCALATE",
-                          "reason": "The AI response could not be parsed — escalating to a human by default.",
-                          "draft_reply": "", "policy_pages": []}
-            # Ensure policy_pages is always a list of ints
-            raw_pages = result.get("policy_pages", [])
-            if isinstance(raw_pages, list):
-                pages = [int(p) for p in raw_pages if str(p).strip().isdigit()]
-            elif isinstance(raw_pages, str):
-                pages = [int(x) for x in raw_pages.replace(",", " ").split() if x.strip().isdigit()]
-            else:
-                pages = []
-            result["policy_pages"] = sorted(set(pages))
-            result["agent_steps"] = agent_steps
-            return result
-
-        # Execute tool calls
-        for tc in tool_calls:
-            fn_name = tc.function.name
-            try:
-                fn_args = json.loads(tc.function.arguments)
-            except Exception:
-                messages.append({"role": "tool", "tool_call_id": tc.id,
-                                 "content": "ERROR: malformed tool arguments — retry with valid JSON."})
-                continue
-            tool_result = run_tool(fn_name, fn_args)
-            total_tool_calls += 1
-            arg_preview = fn_args.get("query") or fn_args.get("issue_type") or fn_args.get("reason") or (fn_args.get("text", "")[:60])
-            agent_steps.append({"tool": fn_name, "query": arg_preview, "result_preview": tool_result[:200]})
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tc.id,
-                "content": tool_result,
-            })
-
-    return {"decision": "ESCALATE", "reason": "Agent could not reach a conclusion.", "draft_reply": "", "policy_pages": [], "agent_steps": agent_steps}
+    raw_pages = parsed.get("policy_pages", [])
+    if isinstance(raw_pages, list):
+        pages = [int(p) for p in raw_pages if str(p).strip().isdigit()]
+    elif isinstance(raw_pages, str):
+        pages = [int(x) for x in raw_pages.replace(",", " ").split() if x.strip().isdigit()]
+    else:
+        pages = []
+    parsed["policy_pages"] = sorted(set(pages))
+    parsed["agent_steps"] = agent_steps
+    return parsed
 
 
 @app.post("/ask")
@@ -378,15 +337,13 @@ def ask(body: AskRequest):
     )
 
     try:
-        response = client.chat.completions.create(
-            model=resolve_model(provider, "llama-3.1-8b-instant"),
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
+        response = client.bind(model=resolve_model(provider, "llama-3.1-8b-instant"), temperature=0).invoke(
+            [HumanMessage(content=prompt)]
         )
     except Exception as e:
         raise_for_groq_error(e)
 
-    answer = response.choices[0].message.content.strip()
+    answer = response.content.strip()
     pages = sorted({r.chunk.page for r in results})
 
     _state["chat_history"].append({"question": body.question, "answer": answer})
