@@ -2,7 +2,7 @@
 Upload a policy PDF + paste a support ticket → agent retrieves relevant policy
 via tool calls → decides escalate vs auto-resolve → drafts a grounded reply.
 """
-import re, sys, json
+import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -14,6 +14,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel
 
 from shared.errors import raise_for_groq_error, require_client
+from shared.json_repair import extract_json_object
 from shared.llm_agent import run_tool_calling_agent
 from shared.llm_client import SetKeyRequest, resolve_model, validate_key
 from shared.pdf_utils import build_context, chunk_pages, embed_chunks, extract_pages, is_grounded, retrieve
@@ -253,25 +254,7 @@ def _run_triage(body: TriageRequest):
     if not result.converged:
         return {"decision": "ESCALATE", "reason": "Agent could not reach a conclusion.", "draft_reply": "", "policy_pages": [], "agent_steps": agent_steps}
 
-    def _try_json(raw: str):
-        try:
-            return json.loads(raw)
-        except Exception:
-            pass
-        try:
-            return json.loads(re.sub(r",\s*([}\]])", r"\1", raw))
-        except Exception:
-            return None
-
-    content = result.content or ""
-    clean = content
-    if "```" in clean:
-        m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", clean, re.DOTALL)
-        if m:
-            clean = m.group(1)
-    start = clean.find("{")
-    end = clean.rfind("}") + 1
-    parsed = _try_json(clean[start:end]) if start != -1 else None
+    parsed = extract_json_object(result.content or "")
 
     if not parsed or "decision" not in parsed:
         # Re-prompt for structured JSON, with the full tool-call trace still
@@ -280,9 +263,7 @@ def _run_triage(body: TriageRequest):
             content="Now return your final answer as a JSON object with keys: decision, reason, draft_reply, policy_pages. No markdown, raw JSON only."
         )]
         r2 = client.bind(model=model, temperature=0, response_format={"type": "json_object"}).invoke(reprompt)
-        content2 = r2.content or ""
-        s = content2.find("{"); e = content2.rfind("}") + 1
-        parsed = _try_json(content2[s:e]) if s != -1 else None
+        parsed = extract_json_object(r2.content or "")
 
     if not parsed or "decision" not in parsed:
         parsed = {"decision": "ESCALATE",

@@ -3,7 +3,7 @@ Embeds both documents as chunks.
 Cross-retrieves corresponding sections from each document using topic queries,
 then generates a diff grounded in retrieved paired evidence with page citations.
 """
-import io, sys, json, re
+import io, sys
 from pathlib import Path
 from typing import List
 
@@ -16,6 +16,7 @@ from langchain_core.messages import HumanMessage
 from pypdf import PdfReader
 
 from shared.errors import raise_for_groq_error, require_client
+from shared.json_repair import extract_json_object
 from shared.llm_agent import run_tool_calling_agent
 from shared.llm_client import SetKeyRequest, resolve_model, validate_key
 from shared.pdf_utils import MIN_RELEVANCE_SCORE, build_context, chunk_pages, embed_chunks, embed_queries, extract_pages, retrieve, retrieve_with_embedding
@@ -96,27 +97,6 @@ COMPARISON_TOPICS = [
     "benefits entitlements rewards programme",
     "deadlines timelines notice periods",
 ]
-
-
-def _parse_json(content: str) -> dict:
-    if "```" in content:
-        m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
-        if m:
-            content = m.group(1)
-    s = content.find("{"); e = content.rfind("}") + 1
-    if s == -1:
-        return {}
-    raw = content[s:e]
-    try:
-        return json.loads(raw)
-    except Exception:
-        pass
-    # Repair common model mistakes: trailing commas before } or ]
-    repaired = re.sub(r",\s*([}\]])", r"\1", raw)
-    try:
-        return json.loads(repaired)
-    except Exception:
-        return {}
 
 
 @app.get("/")
@@ -259,7 +239,7 @@ def _run_analyze():
         max_iterations=5, max_tool_calls_per_turn=2, max_total_tool_calls=6,
     )
     raw = (agent_result.content or "").strip() if agent_result.converged else ""
-    data = _parse_json(raw) if raw else {}
+    data = extract_json_object(raw) if raw else {}
     if not _is_valid_analysis(data):
         repair_prompt = (
             "Your previous answer was not a valid document diff JSON object.\n"
@@ -272,7 +252,7 @@ def _run_analyze():
         response = client.bind(model=model, temperature=0, response_format={"type": "json_object"}).invoke(
             [HumanMessage(content=repair_prompt)]
         )
-        data = _parse_json(response.content.strip())
+        data = extract_json_object(response.content.strip())
     if not _is_valid_analysis(data):
         raise HTTPException(502, "The AI returned an invalid diff analysis. Please retry; no fake result was shown.")
 

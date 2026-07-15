@@ -13,8 +13,10 @@ pydantic==2.10.3
 # in a Rust-based uuid_utils native extension (for UUID7 generation) that this
 # environment's Application Control policy blocks at DLL-load time. 0.3.x has
 # no such dependency and covers everything these apps need (ChatOpenAI,
-# InMemoryVectorStore, tool-calling agents).
-langchain==0.3.27
+# InMemoryVectorStore, tool-calling agents). Only langchain-core/-openai are
+# imported anywhere — the umbrella `langchain` package (agents/chains/prompts)
+# is never touched, since the tool-calling loop is hand-rolled in
+# shared/llm_agent.py rather than using LangChain's AgentExecutor.
 langchain-openai==0.3.28
 langchain-core==0.3.72
 

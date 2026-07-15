@@ -2,7 +2,7 @@
 Upload any PDF → AI generates Q&A pairs with page citations.
 Users can regenerate individual FAQs, delete them, or request more.
 """
-import sys, json, re
+import sys
 from pathlib import Path
 from typing import List, Optional
 
@@ -15,6 +15,7 @@ from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 
 from shared.errors import raise_for_groq_error, require_client
+from shared.json_repair import extract_json_array
 from shared.llm_agent import run_tool_calling_agent
 from shared.llm_client import SetKeyRequest, resolve_model, validate_key
 from shared.pdf_utils import build_context, chunk_pages, embed_chunks, extract_pages, is_grounded, retrieve
@@ -91,34 +92,7 @@ class AskRequest(BaseModel):
 
 
 def _parse_faq_list(content: str) -> List[dict]:
-    if "```" in content:
-        m = re.search(r"```(?:json)?\s*(\[.*?\]|\{.*?\})\s*```", content, re.DOTALL)
-        if m:
-            content = m.group(1)
-
-    def _try(raw: str):
-        try:
-            return json.loads(raw)
-        except Exception:
-            pass
-        try:
-            return json.loads(re.sub(r",\s*([}\]])", r"\1", raw))
-        except Exception:
-            return None
-
-    # Accept either a bare array or an object wrapping one (e.g. {"faqs": [...]})
-    s = content.find("[")
-    parsed = _try(content[s:content.rfind("]") + 1]) if s != -1 else None
-    if parsed is None:
-        s = content.find("{")
-        obj = _try(content[s:content.rfind("}") + 1]) if s != -1 else None
-        if isinstance(obj, dict):
-            for v in obj.values():
-                if isinstance(v, list):
-                    parsed = v
-                    break
-    if not isinstance(parsed, list):
-        return []
+    parsed = extract_json_array(content)
     # Keep only well-formed entries so the frontend never crashes
     return [f for f in parsed if isinstance(f, dict) and f.get("question") and f.get("answer")]
 

@@ -3,7 +3,7 @@ Agent uses tool calls to decide what to retrieve (retrieve_content) and what
 sections to write (write_section), one section at a time, grounded in its own
 retrieval rather than a single upfront completion.
 """
-import sys, json, re
+import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -15,6 +15,7 @@ from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 
 from shared.errors import raise_for_groq_error, require_client
+from shared.json_repair import extract_json_object
 from shared.llm_agent import run_tool_calling_agent
 from shared.llm_client import SetKeyRequest, resolve_model, validate_key
 from shared.pdf_utils import build_context, chunk_pages, embed_chunks, extract_pages, is_grounded, retrieve
@@ -182,21 +183,6 @@ def _build_report_evidence() -> str:
     return "\n\n---\n\n".join(blocks)
 
 
-def _parse_report_json(content: str) -> dict:
-    if "```" in content:
-        m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
-        if m:
-            content = m.group(1)
-    start = content.find("{")
-    end = content.rfind("}") + 1
-    if start == -1:
-        return {}
-    try:
-        return json.loads(content[start:end])
-    except Exception:
-        return {}
-
-
 AGENT_SYSTEM_PROMPT_TEMPLATE = (
     "You are a report writing agent working on the document '{filename}'.\n"
     "You have two tools: retrieve_content(query, section) to search the PDF for evidence, "
@@ -256,7 +242,7 @@ def _run_agent():
         response = client.bind(model=model, temperature=0, response_format={"type": "json_object"}).invoke(
             [HumanMessage(content=fallback_prompt)]
         )
-        parsed = _parse_report_json(response.content or "")
+        parsed = extract_json_object(response.content or "")
         report_sections = parsed.get("report", {}) if isinstance(parsed, dict) else {}
         for section in report_sections.values():
             steps.append({"tool": "write_section", "section": section.get("label", "")})

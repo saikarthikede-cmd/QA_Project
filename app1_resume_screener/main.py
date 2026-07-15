@@ -3,7 +3,7 @@ Embeds both JD and resumes as chunks.
 Retrieves evidence from each resume using JD-derived queries, then scores.
 Every assessment is grounded in retrieved chunks with page citations.
 """
-import sys, json, re
+import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from typing import List
 
 from shared.errors import raise_for_groq_error, require_client
+from shared.json_repair import extract_json_object
 from shared.llm_agent import run_tool_calling_agent
 from shared.llm_client import SetKeyRequest, resolve_model, validate_key
 from shared.pdf_utils import build_context, chunk_pages, embed_chunks, extract_pages, is_grounded, retrieve
@@ -101,27 +102,6 @@ def _make_resume_search_tool(resume_chunks: List):
         return "Unknown tool."
 
     return run_tool
-
-
-def _parse_json(content: str) -> dict | list:
-    if "```" in content:
-        m = re.search(r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```", content, re.DOTALL)
-        if m:
-            content = m.group(1)
-    s = content.find("{") if "{" in content else content.find("[")
-    e = content.rfind("}") + 1 if "{" in content else content.rfind("]") + 1
-    if s == -1:
-        return {}
-    raw = content[s:e]
-    try:
-        return json.loads(raw)
-    except Exception:
-        pass
-    # Repair common model mistakes: trailing commas before } or ]
-    try:
-        return json.loads(re.sub(r",\s*([}\]])", r"\1", raw))
-    except Exception:
-        return {}
 
 
 @app.get("/")
@@ -244,11 +224,11 @@ def _run_screen():
             tools=SEARCH_TOOL, run_tool=_make_resume_search_tool(resume_chunks),
             max_iterations=4, max_tool_calls_per_turn=2, max_total_tool_calls=4,
         )
-        data = _parse_json(agent_result.content.strip()) if agent_result.converged and agent_result.content else {}
+        data = extract_json_object(agent_result.content.strip()) if agent_result.converged and agent_result.content else {}
         if not data or "score" not in data:
             # Retry once with a plain direct call before giving up
             retry = client.bind(model=model, temperature=0).invoke([HumanMessage(content=prompt)])
-            data = _parse_json(retry.content.strip())
+            data = extract_json_object(retry.content.strip())
         if not data or "score" not in data:
             # Honest failure — never silently score a real candidate as 0
             data = {

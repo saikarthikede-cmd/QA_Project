@@ -20,6 +20,10 @@ from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage
 from openai import BadRequestError
 
 
+def _flatten(turns: List[List[BaseMessage]]) -> List[BaseMessage]:
+    return [m for turn in turns for m in turn]
+
+
 @dataclass
 class AgentResult:
     content: Optional[str]  # final assistant text; None if it never converged
@@ -77,7 +81,7 @@ def run_tool_calling_agent(
             break
 
         recent_turns = turns if max_context_turns is None else turns[-max_context_turns:]
-        context = opening + [m for turn in recent_turns for m in turn]
+        context = opening + _flatten(recent_turns)
 
         try:
             response = bound.invoke(context)
@@ -87,7 +91,7 @@ def run_tool_calling_agent(
 
         tool_calls = (response.tool_calls or [])[:max_tool_calls_per_turn]
         if not tool_calls:
-            full_history = opening + [m for turn in turns for m in turn] + [response]
+            full_history = opening + _flatten(turns) + [response]
             return AgentResult(content=response.content or "", agent_steps=agent_steps, converged=True, messages=full_history)
 
         current_turn: List[BaseMessage] = [response]
@@ -114,5 +118,5 @@ def run_tool_calling_agent(
         if stop_when and stop_when():
             break
 
-    full_history = opening + [m for turn in turns for m in turn]
+    full_history = opening + _flatten(turns)
     return AgentResult(content=None, agent_steps=agent_steps, converged=False, messages=full_history)

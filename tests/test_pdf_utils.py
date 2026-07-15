@@ -1,10 +1,9 @@
 """Tests for shared PDF utilities and safe execution."""
 from __future__ import annotations
 
-import numpy as np
 import pytest
 
-from shared.pdf_utils import chunk_pages, cosine_similarity, embed_chunks, extract_pages, retrieve
+from shared.pdf_utils import chunk_pages, embed_chunks, extract_pages, retrieve
 from shared.safe_exec import run_sandboxed_python
 
 
@@ -37,15 +36,6 @@ def test_chunk_pages_tagged_with_page_numbers(text_pdf):
     assert len(chunks) > 0
     assert all(c.page == 1 for c in chunks)
     assert all(c.source == "test.pdf" for c in chunks)
-
-
-def test_cosine_similarity():
-    a = np.array([1.0, 0.0])
-    b = np.array([0.0, 1.0])
-    assert cosine_similarity(a, b) == pytest.approx(0.0, abs=1e-6)
-
-    c = np.array([1.0, 1.0])
-    assert cosine_similarity(a, c) == pytest.approx(0.7071, abs=1e-4)
 
 
 def test_retrieve_top_k(text_pdf):
