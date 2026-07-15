@@ -40,6 +40,7 @@ class FakeLLMClient:
     def __init__(self, *responses: AIMessage):
         self.responses = list(responses)
         self.i = 0
+        self.call_count = 0  # lets tests prove the agent actually looped, not just returned response 0
 
     def bind_tools(self, tools, tool_choice=None):
         return self
@@ -48,6 +49,7 @@ class FakeLLMClient:
         return self
 
     def invoke(self, messages):
+        self.call_count += 1
         response = self.responses[self.i]
         if self.i < len(self.responses) - 1:
             self.i += 1
@@ -108,6 +110,39 @@ def test_app1_upload_and_mock_screen(text_pdf, upload_pdf, monkeypatch):
     assert data["results"][0]["score"] == 90
 
 
+def test_app1_screen_agent_uses_search_tool(text_pdf, upload_pdf, monkeypatch):
+    """Proves search_resume_evidence is actually wired up end to end: script
+    the model calling the tool, then answering — not just the trivial
+    no-tool-call path every other test here exercises."""
+    client = TestClient(app1_main.app)
+    jd_bytes = text_pdf(
+        "Senior Backend Engineer. Requires Python, FastAPI, PostgreSQL, AWS, 5+ years experience."
+    )
+    r = client.post("/upload-jd", files={"file": ("jd.pdf", jd_bytes, "application/pdf")})
+    assert r.status_code == 200
+    resume_bytes = text_pdf(
+        "Sarah Chen. 8 years experience. Python, FastAPI, PostgreSQL, AWS, Kubernetes."
+    )
+    r = client.post("/upload-resume", files={"file": ("resume.pdf", resume_bytes, "application/pdf")})
+    assert r.status_code == 200
+
+    fake_client = FakeLLMClient(
+        FakeResponse("", tool_calls=[make_tool_call("search_resume_evidence", {"query": "AWS certifications"})]),
+        FakeResponse(
+            '{"score": 85, "recommendation": "Strong Match", "matched_skills": ["Python"], '
+            '"missing_skills": [], "red_flags": [], "summary": "Good fit.", "cited_pages": [1]}'
+        ),
+    )
+    monkeypatch.setattr(app1_main, "validate_key", lambda provider, api_key: (fake_client, provider))
+    assert client.post("/api/set-key", json={"provider": "groq", "api_key": "test-key"}).status_code == 200
+
+    r = client.post("/screen")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["results"][0]["score"] == 85
+    assert fake_client.call_count == 2, "one call for the tool call, one for the final answer"
+
+
 def test_app1_rejects_non_pdf():
     client = TestClient(app1_main.app)
     r = client.post("/upload-jd", files={"file": ("bad.txt", b"not a pdf", "text/plain")})
@@ -133,6 +168,33 @@ def test_app2_upload_and_mock_analyze(text_pdf, upload_pdf, monkeypatch):
     assert "summary" in r.json()
 
 
+def test_app2_analyze_agent_uses_search_tool(text_pdf, upload_pdf, monkeypatch):
+    """Proves search_document is actually wired up: script the model calling
+    it on Document A, then finalizing the comparison."""
+    client = TestClient(app2_main.app)
+    doc_a = text_pdf("Return policy: 30 days. Shipping: 5-7 days.")
+    doc_b = text_pdf("Return policy: 60 days. Shipping: 3-5 days.")
+    r = client.post("/upload-a", files={"file": ("a.pdf", doc_a, "application/pdf")})
+    assert r.status_code == 200
+    r = client.post("/upload-b", files={"file": ("b.pdf", doc_b, "application/pdf")})
+    assert r.status_code == 200
+
+    fake_client = FakeLLMClient(
+        FakeResponse("", tool_calls=[make_tool_call("search_document", {"doc": "A", "query": "shipping"})]),
+        FakeResponse(
+            '{"summary": "Policies updated.", "severity": "Major", "change_count": 2, '
+            '"added": [], "removed": [], "modified": [], "unchanged_note": ""}'
+        ),
+    )
+    monkeypatch.setattr(app2_main, "validate_key", lambda provider, api_key: (fake_client, provider))
+    assert client.post("/api/set-key", json={"provider": "groq", "api_key": "test-key"}).status_code == 200
+
+    r = client.post("/analyze")
+    assert r.status_code == 200
+    assert "summary" in r.json()
+    assert fake_client.call_count == 2, "one call for the tool call, one for the final answer"
+
+
 def test_app3_upload_and_mock_generate(text_pdf, upload_pdf, monkeypatch):
     client = TestClient(app3_main.app)
     upload_pdf(client, "/upload")
@@ -143,6 +205,24 @@ def test_app3_upload_and_mock_generate(text_pdf, upload_pdf, monkeypatch):
     r = client.post("/generate")
     assert r.status_code == 200
     assert len(r.json()["faqs"]) == 1
+
+
+def test_app3_generate_agent_uses_search_tool(text_pdf, upload_pdf, monkeypatch):
+    """Proves search_document is actually wired up for FAQ generation too."""
+    client = TestClient(app3_main.app)
+    upload_pdf(client, "/upload")
+
+    fake_client = FakeLLMClient(
+        FakeResponse("", tool_calls=[make_tool_call("search_document", {"query": "shipping policy"})]),
+        FakeResponse('{"faqs": [{"question": "What is the return policy?", "answer": "30 days.", "page": 1}]}'),
+    )
+    monkeypatch.setattr(app3_main, "validate_key", lambda provider, api_key: (fake_client, provider))
+    assert client.post("/api/set-key", json={"provider": "groq", "api_key": "test-key"}).status_code == 200
+
+    r = client.post("/generate")
+    assert r.status_code == 200
+    assert len(r.json()["faqs"]) == 1
+    assert fake_client.call_count == 2, "one call for the tool call, one for the final answer"
 
 
 def test_app3_faq_crud(text_pdf, upload_pdf, monkeypatch):
@@ -229,6 +309,26 @@ def test_app6_upload_and_mock_analysis(text_pdf, upload_pdf, monkeypatch):
     data = r.json()
     assert "answer" in data
     assert any(step["tool"] == "run_python" for step in data["agent_steps"])
+
+
+def test_app6_analyze_never_converges_returns_honest_fallback(text_pdf, upload_pdf, monkeypatch):
+    """Reproduces the QA-reported failure mode ("Agent did not converge in
+    time") directly: the model keeps calling tools and never gives a final
+    answer. Must stop at the safety cap and return the honest fallback
+    message, not hang or crash."""
+    client = TestClient(app6_main.app)
+    upload_pdf(client, "/upload")
+
+    # Single scripted response repeats forever (FakeLLMClient behavior) —
+    # every turn is another tool call, the model never stops to answer.
+    set_fake_key(monkeypatch, app6_main, client, FakeResponse(
+        "", tool_calls=[make_tool_call("retrieve_data", {"query": "all figures"})],
+    ))
+    r = client.post("/analyze", json={"question": "What is the total sum of all figures?"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["answer"] == "Agent did not converge in time. Try a simpler/more specific question."
+    assert len(data["agent_steps"]) == 12  # stopped exactly at max_total_tool_calls, not runaway
 
 
 def test_app6_sandbox_rejects_malicious_code(text_pdf, upload_pdf, monkeypatch):
