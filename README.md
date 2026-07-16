@@ -1,4 +1,4 @@
-powershell
+powershell-
 
 docker compose up -d --build
 
