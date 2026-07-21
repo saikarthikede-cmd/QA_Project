@@ -1,0 +1,28 @@
+# Use Python 3.11: py -3.11 -m pip install -r requirements.txt
+# Python 3.14 is not yet supported (pydantic-core has no wheel for it)
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+python-multipart==0.0.12
+pypdf==4.3.1
+sentence-transformers==2.7.0
+numpy==1.26.4
+openai>=1.50.0
+pydantic==2.10.3
+
+# LangChain — pinned to the 0.3.x line deliberately: langchain-core>=1.x pulls
+# in a Rust-based uuid_utils native extension (for UUID7 generation) that this
+# environment's Application Control policy blocks at DLL-load time. 0.3.x has
+# no such dependency and covers everything these apps need (ChatOpenAI,
+# InMemoryVectorStore, tool-calling agents). Only langchain-core/-openai are
+# imported anywhere — the umbrella `langchain` package (agents/chains/prompts)
+# is never touched, since the tool-calling loop is hand-rolled in
+# shared/llm_agent.py rather than using LangChain's AgentExecutor.
+langchain-openai==0.3.28
+langchain-core==0.3.72
+
+# Test PDF generation
+fpdf2==2.8.3
+
+# Development / testing
+pytest==8.3.4
+httpx==0.28.1
