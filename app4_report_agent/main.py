@@ -1,8 +1,9 @@
-﻿"""App 4 – PDF Report Summarizer Agent  [AGENTIC]
+"""App 4 – PDF Report Summarizer Agent  [AGENTIC]
 Agent uses tool calls to decide what to retrieve (retrieve_content) and what
 sections to write (write_section), one section at a time, grounded in its own
 retrieval rather than a single upfront completion.
 """
+import re
 import sys
 from pathlib import Path
 
@@ -104,23 +105,44 @@ TOOLS = [
 ]
 
 
+def normalize_section_key(title: str) -> str:
+    cleaned = str(title or "").lower().strip()
+    cleaned = cleaned.replace("&", "and")
+    cleaned = re.sub(r"[^\w\s]", "", cleaned)
+    slug = "_".join(cleaned.split())
+    if "exec" in slug or "summary" in slug:
+        return "executive_summary"
+    if "theme" in slug or "priorit" in slug:
+        return "key_themes"
+    if "data" in slug or "stat" in slug or "metric" in slug or "number" in slug or "financial" in slug:
+        return "data_statistics"
+    if "recommend" in slug or "next_step" in slug or "action" in slug:
+        return "recommendations"
+    if "risk" in slug or "challenge" in slug or "threat" in slug or "issue" in slug:
+        return "risks_challenges"
+    return slug
+
+
 def run_tool(name: str, args: dict, report_sections: dict) -> str:
     if name == "retrieve_content":
         query = str(args.get("query", ""))[:300]
         if not query:
             return "ERROR: missing 'query' argument."
-        results = retrieve(query, _state["chunks"], top_k=2)
+        results = retrieve(query, _state["chunks"], top_k=3)
         if not results:
             return "No relevant content found."
-        # Truncate to stay within token limits
-        return build_context(results)[:600]
+        # Provide rich context for grounded report generation (up to 2500 chars)
+        return build_context(results)[:2500]
 
     if name == "write_section":
         if not args.get("title") or not args.get("content"):
             return "ERROR: write_section requires 'title' and 'content'."
-        key = str(args["title"]).lower().replace(" ", "_")
+        raw_title = str(args["title"]).strip()
+        key = normalize_section_key(raw_title)
+        canonical_titles = {s[0]: s[1] for s in REPORT_SECTIONS}
+        label = canonical_titles.get(key, raw_title)
         report_sections[key] = {
-            "label": args["title"],
+            "label": label,
             "content": args["content"],
             "pages": args.get("pages", []),
         }
@@ -145,6 +167,8 @@ async def upload(file: UploadFile = File(...)):
         pages = extract_pages(pdf_bytes)
     except ValueError as e:
         raise HTTPException(422, str(e))
+    except Exception as e:
+        raise HTTPException(400, f"Could not read PDF: {e}")
     chunks = chunk_pages(pages, source=file.filename)
     chunks = embed_chunks(chunks)
     _state["chunks"] = chunks
@@ -159,6 +183,9 @@ def generate_report():
     if not _state["chunks"]:
         raise HTTPException(400, "No PDF uploaded yet.")
     require_client(client)
+    # Reset chat history and previous report on re-run for clean idempotency
+    _state["chat_history"] = []
+    _state["report"] = {}
     try:
         return _run_agent()
     except Exception as e:
@@ -177,8 +204,8 @@ REPORT_SECTIONS = [
 def _build_report_evidence() -> str:
     blocks = []
     for _, title, query in REPORT_SECTIONS:
-        results = retrieve(query, _state["chunks"], top_k=2)
-        context = build_context(results)[:900] if results else "No relevant content found."
+        results = retrieve(query, _state["chunks"], top_k=3)
+        context = build_context(results)[:2500] if results else "No relevant content found."
         blocks.append(f"[SECTION: {title}]\n{context}")
     return "\n\n---\n\n".join(blocks)
 
@@ -223,7 +250,6 @@ def _run_agent():
     if not report_sections:
         # The model never engaged with the tools (or hit a safety cap immediately) —
         # fall back to a single grounded completion over upfront-retrieved evidence
-        # rather than showing nothing.
         evidence = _build_report_evidence()
         fallback_prompt = (
             f"You are a report writing agent. Document: '{_state['filename']}'.\n"
@@ -243,11 +269,30 @@ def _run_agent():
             [HumanMessage(content=fallback_prompt)]
         )
         parsed = extract_json_object(response.content or "")
-        report_sections = parsed.get("report", {}) if isinstance(parsed, dict) else {}
-        for section in report_sections.values():
+        raw_fallback = parsed.get("report", {}) if isinstance(parsed, dict) else {}
+        for k, section in raw_fallback.items():
+            norm_k = normalize_section_key(section.get("label", k))
+            report_sections[norm_k] = section
             steps.append({"tool": "write_section", "section": section.get("label", "")})
 
-    if not report_sections:
+    # Guarantee all 5 canonical sections exist and are ordered predictably
+    canonical_titles = {s[0]: s[1] for s in REPORT_SECTIONS}
+    ordered_report = {}
+    for key, title, _ in REPORT_SECTIONS:
+        if key in report_sections:
+            sec = report_sections[key]
+            if not sec.get("label"):
+                sec["label"] = title
+            ordered_report[key] = sec
+        else:
+            ordered_report[key] = {
+                "label": title,
+                "content": "No relevant content found in the document.",
+                "pages": [],
+            }
+    report_sections = ordered_report
+
+    if not any(s.get("content") and s.get("content") != "No relevant content found in the document." for s in report_sections.values()):
         raise HTTPException(502, "The AI did not return a valid report. Please retry; no fake report was shown.")
 
     _state["report"] = report_sections
@@ -265,13 +310,13 @@ def chat(body: ChatRequest):
     if not is_grounded(results) and not _state["report"]:
         return {"answer": "No relevant content found in the document.", "pages": []}
     require_client(client)
-    context = build_context(results)[:1000] if results else "No relevant content found."
+    context = build_context(results)[:2500] if results else "No relevant content found."
 
     report_summary = ""
     if _state["report"]:
-        report_summary = "\n".join(
-            f"- {sec['label']}: {sec['content'][:150]}" for sec in _state["report"].values()
-        )[:800]
+        report_summary = "\n\n".join(
+            f"### {sec['label']}\n{sec['content']}" for sec in _state["report"].values()
+        )[:3000]
 
     history_text = "\n".join(
         f"Q: {h['question']}\nA: {h['answer'][:200]}" for h in _state["chat_history"][-3:]
@@ -279,12 +324,15 @@ def chat(body: ChatRequest):
 
     prompt = (
         f"You are answering questions about the document '{_state['filename']}'.\n\n"
-        f"GENERATED REPORT (for context):\n{report_summary}\n\n"
+        f"GENERATED REPORT:\n{report_summary}\n\n"
         f"RETRIEVED DOCUMENT EXCERPTS:\n{context}\n\n"
         + (f"RECENT CONVERSATION:\n{history_text}\n\n" if history_text else "")
-        + f"NEW QUESTION: {body.question}\n\n"
-        "Answer using only the report and retrieved excerpts above. If not covered, say so. "
-        "Keep it concise (2-4 sentences) and cite page numbers if available."
+        + f"QUESTION: {body.question}\n\n"
+        "Instructions:\n"
+        "- Answer using ONLY the generated report and retrieved document excerpts above.\n"
+        "- If the question asks for information not present in the document or report, explicitly state that it is not covered or not mentioned.\n"
+        "- If the question contains a false premise, clearly clarify the true facts from the text.\n"
+        "- Keep it concise (2-4 sentences)."
     )
 
     try:
@@ -294,7 +342,24 @@ def chat(body: ChatRequest):
     except Exception as e:
         raise_for_groq_error(e)
     answer = response.content.strip()
-    pages = sorted({r.chunk.page for r in results})
+
+    negation_phrases = [
+        "not covered",
+        "not mentioned",
+        "not found",
+        "does not mention",
+        "no information",
+        "not specified",
+        "no relevant content",
+        "not state",
+        "not provide",
+        "not discussed",
+    ]
+    is_negative = any(phrase in answer.lower() for phrase in negation_phrases)
+
+    pages = []
+    if is_grounded(results) and not is_negative:
+        pages = sorted({r.chunk.page for r in results if r.score >= 0.20})
 
     _state["chat_history"].append({"question": body.question, "answer": answer})
     _state["chat_history"] = _state["chat_history"][-10:]

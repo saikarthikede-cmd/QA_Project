@@ -214,6 +214,8 @@ async function generateReport(){
   agentLog.style.display='block';
   agentLog.innerHTML='<div class="agent-step"><span class="spinner"></span>Agent retrieving content and writing sections…</div>';
   reportOutput.innerHTML='';
+  const chatLogEl=document.getElementById('chatLog');
+  if(chatLogEl) chatLogEl.innerHTML='';
 
   try{
     const r=await fetch('/generate-report',{method:'POST'});
@@ -233,7 +235,11 @@ async function generateReport(){
     _lastReport=d.report;
     dlBtn.style.display='inline-block';
   }catch(e){
-    agentLog.innerHTML='<div class="agent-step" style="color:#f87171">✗ '+e.message+'</div>';
+    let msg=e.message||'Agent failed';
+    if(msg.includes('503')||msg.toLowerCase().includes('high demand')||msg.toLowerCase().includes('unavailable')){
+      msg='The AI model is experiencing high demand. Please try again in a few moments.';
+    }
+    agentLog.innerHTML='<div class="agent-step" style="color:#f87171">✗ '+escHtml(msg)+'</div>';
   }finally{
     genBtn.disabled=false;
   }
@@ -241,12 +247,17 @@ async function generateReport(){
 
 function renderReport(report, filename){
   let html=`<div style="margin-bottom:16px;font-size:.85rem;color:#64748b">Report from: <strong style="color:#e2e8f0">${filename}</strong></div>`;
-  for(const[key,sec] of Object.entries(report)){
-    const pills=sec.pages.map(p=>`<div class="page-pill">p.${p}</div>`).join('');
+  const canonicalOrder=['executive_summary','key_themes','data_statistics','recommendations','risks_challenges'];
+  const keys=[...new Set([...canonicalOrder, ...Object.keys(report||{})])];
+  for(const key of keys){
+    const sec=(report||{})[key];
+    if(!sec) continue;
+    const hasPages=Array.isArray(sec.pages)&&sec.pages.length>0;
+    const pills=hasPages?sec.pages.map(p=>`<div class="page-pill">p.${p}</div>`).join(''):'';
     html+=`<div class="section-card">
-      <h3>${sec.label} <span style="font-size:.75rem;font-weight:400;color:#64748b">${sec.pages.length?'pages cited':'no pages'}</span></h3>
-      <p>${escHtml(sec.content)}</p>
-      ${sec.pages.length?`<div class="page-pills">${pills}</div>`:''}
+      <h3>${escHtml(sec.label||key)} <span style="font-size:.75rem;font-weight:400;color:#64748b">${hasPages?'pages cited':'no pages'}</span></h3>
+      <p>${escHtml(sec.content||'')}</p>
+      ${hasPages?`<div class="page-pills">${pills}</div>`:''}
     </div>`;
   }
   reportOutput.innerHTML=html;
@@ -275,7 +286,11 @@ async function sendChat(){
     if(!r.ok)throw new Error(d.detail||'Error');
     el.innerHTML=escHtml(d.answer)+(d.pages&&d.pages.length?`<div class="chat-pages">📄 Pages: ${d.pages.join(', ')}</div>`:'');
   }catch(e){
-    document.getElementById(thinkingId).innerHTML='✗ '+escHtml(e.message);
+    let msg=e.message||'Error';
+    if(msg.includes('503')||msg.toLowerCase().includes('high demand')||msg.toLowerCase().includes('unavailable')){
+      msg='The AI model is experiencing high demand. Please try again in a few moments.';
+    }
+    document.getElementById(thinkingId).innerHTML='✗ '+escHtml(msg);
   }finally{
     sendBtn.disabled=false;
     log.scrollTop=log.scrollHeight;
