@@ -18,7 +18,7 @@ if (-not $apps.ContainsKey($App)) {
 }
 
 $cfg = $apps[$App]
-Write-Host "Starting App $App — $($cfg.name) on http://localhost:$($cfg.port)" -ForegroundColor Cyan
+Write-Host "Starting App $App - $($cfg.name) on http://localhost:$($cfg.port)" -ForegroundColor Cyan
 Set-Location (Join-Path $PSScriptRoot $cfg.dir)
 
 if (Get-Command "uv" -ErrorAction SilentlyContinue) {

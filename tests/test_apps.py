@@ -1,6 +1,7 @@
 """Smoke tests for each FastAPI app endpoint."""
 from __future__ import annotations
 
+import io
 import sys
 from pathlib import Path
 
@@ -165,7 +166,113 @@ def test_app2_upload_and_mock_analyze(text_pdf, upload_pdf, monkeypatch):
     ))
     r = client.post("/analyze")
     assert r.status_code == 200
-    assert "summary" in r.json()
+    data = r.json()
+    assert data["summary"] == "Policies updated."
+    assert data["severity"] == "Major"
+    assert data["change_count"] == 2
+    assert data["doc_a"] == "a.pdf"
+    assert data["doc_b"] == "b.pdf"
+    assert data["topics_compared"] >= 1
+    assert data["document_similarity"] >= app2_main.MIN_DOC_SIMILARITY
+
+
+def test_app2_requires_both_documents(text_pdf, monkeypatch):
+    """Analyze must fail clearly until BOTH documents are loaded."""
+    client = TestClient(app2_main.app)
+    empty = {"chunks": [], "filename": "", "page_count": 0}
+    app2_main._state["doc_a"] = dict(empty)
+    app2_main._state["doc_b"] = dict(empty)
+    monkeypatch.setattr(app2_main, "client", None)
+
+    r = client.post("/analyze")
+    assert r.status_code == 400
+    assert "Document A not uploaded" in r.json()["detail"]
+
+    r = client.post("/upload-a", files={"file": ("a.pdf", text_pdf(
+        "Return policy: customers may return any item within 30 days. Shipping takes 5-7 days."
+    ), "application/pdf")})
+    assert r.status_code == 200
+    r = client.post("/analyze")
+    assert r.status_code == 400
+    assert "Document B not uploaded" in r.json()["detail"]
+
+
+def test_app2_rejects_non_pdf():
+    client = TestClient(app2_main.app)
+    r = client.post("/upload-a", files={"file": ("bad.txt", b"not a pdf", "text/plain")})
+    assert r.status_code == 400
+    assert "Only PDF files" in r.json()["detail"]
+
+
+def test_app2_rejects_unreadable_pdf():
+    """A file with a .pdf name but corrupt bytes must be a clear 4xx, not a 500."""
+    client = TestClient(app2_main.app)
+    r = client.post("/upload-a", files={"file": ("bad.pdf", b"this is not a PDF", "application/pdf")})
+    assert r.status_code == 422
+    assert "Could not read this PDF" in r.json()["detail"]
+
+
+def test_app2_rejects_scanned_pdf():
+    from fpdf import FPDF
+
+    pdf = FPDF()
+    pdf.add_page()
+    buffer = io.BytesIO()
+    pdf.output(buffer)
+
+    client = TestClient(app2_main.app)
+    r = client.post("/upload-b", files={"file": ("scan.pdf", buffer.getvalue(), "application/pdf")})
+    assert r.status_code == 422
+    assert "scanned/image PDF" in r.json()["detail"]
+
+
+def test_app2_rejects_unrelated_documents(text_pdf, monkeypatch):
+    """README QA checklist: unrelated docs return a clear "no comparable sections" error."""
+    client = TestClient(app2_main.app)
+    resume = (ROOT / "test_pdfs" / "app1_resume_sarah_chen.pdf").read_bytes()
+    policy = (ROOT / "test_pdfs" / "app5_clouddesk_policy.pdf").read_bytes()
+    assert client.post("/upload-a", files={"file": ("resume.pdf", resume, "application/pdf")}).status_code == 200
+    assert client.post("/upload-b", files={"file": ("policy.pdf", policy, "application/pdf")}).status_code == 200
+
+    # Set a working fake key so a missing gate would otherwise return 200.
+    set_fake_key(monkeypatch, app2_main, client, FakeResponse(
+        '{"summary": "Should never be used.", "severity": "Minor", "change_count": 0, '
+        '"added": [], "removed": [], "modified": [], "unchanged_note": ""}'
+    ))
+    r = client.post("/analyze")
+    assert r.status_code == 422
+    assert "No comparable sections" in r.json()["detail"]
+
+
+def test_app2_accepts_same_document_twice(monkeypatch):
+    client = TestClient(app2_main.app)
+    terms = (ROOT / "test_pdfs" / "app2_terms_v1.pdf").read_bytes()
+    assert client.post("/upload-a", files={"file": ("terms_v1.pdf", terms, "application/pdf")}).status_code == 200
+    assert client.post("/upload-b", files={"file": ("terms_v1.pdf", terms, "application/pdf")}).status_code == 200
+
+    set_fake_key(monkeypatch, app2_main, client, FakeResponse(
+        '{"summary": "No changes.", "severity": "Minor", "change_count": 0, '
+        '"added": [], "removed": [], "modified": [], "unchanged_note": "Identical."}'
+    ))
+    r = client.post("/analyze")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["change_count"] == 0
+    assert data["document_similarity"] > 0.99
+
+
+def test_app2_invalid_llm_output_is_not_faked(text_pdf, monkeypatch):
+    """If both the agent answer and the repair attempt are invalid, return 502
+    rather than inventing a diff."""
+    client = TestClient(app2_main.app)
+    pdf = text_pdf("Return policy: 30 days. Shipping: 5-7 days.")
+    assert client.post("/upload-a", files={"file": ("a.pdf", pdf, "application/pdf")}).status_code == 200
+    assert client.post("/upload-b", files={"file": ("b.pdf", pdf, "application/pdf")}).status_code == 200
+
+    set_fake_key(monkeypatch, app2_main, client, FakeResponse("not json at all"))
+    r = client.post("/analyze")
+    assert r.status_code == 502
+    assert "invalid diff analysis" in r.json()["detail"]
 
 
 def test_app2_analyze_agent_uses_search_tool(text_pdf, upload_pdf, monkeypatch):

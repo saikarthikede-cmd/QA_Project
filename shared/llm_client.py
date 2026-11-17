@@ -1,7 +1,7 @@
 """Runtime provider and API key management with multi-provider and round-robin support.
 
 Supported providers:
-- Groq (llama-3.3-70b-versatile)
+- Groq (openai/gpt-oss-120b)
 - OpenAI (gpt-4o-mini)
 - Gemini (gemini-flash-latest / gemini-flash-lite-latest dynamic alias)
 - Claude / Anthropic (claude-3-5-sonnet-20241022)
@@ -34,7 +34,7 @@ except ImportError:
     HAS_ANTHROPIC = False
 
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
-GROQ_DEFAULT_MODEL = "llama-3.3-70b-versatile"
+GROQ_DEFAULT_MODEL = "openai/gpt-oss-120b"
 OPENAI_DEFAULT_MODEL = "gpt-4o-mini"
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 # Google provides dynamic model aliases:
