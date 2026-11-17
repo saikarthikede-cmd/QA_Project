@@ -2,7 +2,9 @@
 import asyncio, os, sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse

@@ -30,7 +30,7 @@ services:
     restart: unless-stopped
 
   portal:
-    build: {context: ./portal}
+    build: {context: ./src/portal}
     ports: ["8000:8000"]
     environment:
       APP1_HOST: app1
