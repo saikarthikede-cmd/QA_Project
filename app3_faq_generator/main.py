@@ -2,6 +2,7 @@
 Upload any PDF → AI generates Q&A pairs with page citations.
 Users can regenerate individual FAQs, delete them, or request more.
 """
+import re
 import sys
 import pickle
 from pathlib import Path
@@ -18,7 +19,7 @@ from pydantic import BaseModel
 from shared.errors import raise_for_groq_error, require_client
 from shared.json_repair import extract_json_array
 from shared.llm_agent import run_tool_calling_agent
-from shared.llm_client import SetKeyRequest, resolve_model, validate_key
+from shared.llm_client import SetKeyRequest, init_from_env, resolve_model, validate_key
 from shared.pdf_utils import (
     RetrievedChunk,
     build_context,
@@ -34,8 +35,20 @@ app = FastAPI(title="App 3 – FAQ Generator")
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 app.mount("/shared-static", StaticFiles(directory=Path(__file__).parent.parent / "shared" / "static"), name="shared_static")
 
-client = None
-provider = None
+client, provider = init_from_env()
+
+
+@app.get("/api/key-status")
+def key_status():
+    global client, provider
+    if client is None:
+        c, p = init_from_env()
+        if c is not None:
+            client, provider = c, p
+    return {
+        "configured": client is not None,
+        "provider": provider if client is not None else None,
+    }
 
 
 @app.post("/api/set-key")
@@ -104,6 +117,38 @@ QUESTION_EXPANSIONS = [
     (
         ("fee", "fees", "cost", "costs", "pricing"),
         "fee structure processing fees chargeback fee refund fee same-day payout fee currency conversion fee transaction fees",
+    ),
+    (
+        ("limit", "limits", "maximum", "cap", "transaction limit"),
+        "transaction limits standard accounts $10,000 $50,000 verified business accounts $250,000 ACH limits",
+    ),
+    (
+        ("pci", "pci-dss", "compliance", "certified", "security", "encryption"),
+        "security compliance PCI-DSS Level 1 certified AES-256 3DS2 2FA mandatory machine learning models",
+    ),
+    (
+        ("crypto", "cryptocurrency", "bitcoin", "ethereum"),
+        "cryptocurrency Bitcoin Ethereum SmartPay Crypto separate activation",
+    ),
+    (
+        ("dispute", "chargeback", "win rate"),
+        "chargebacks dispute notification 7 days evidence dispute win rate 68% complete documentation",
+    ),
+    (
+        ("error", "error code", "4001", "troubleshoot", "troubleshooting", "declined"),
+        "troubleshooting common errors 4001 Insufficient Funds card declined by issuer 4002 4003 4010 5001 5002",
+    ),
+    (
+        ("retention", "retained", "data retain"),
+        "data retained 7 years compliance reporting analytics",
+    ),
+    (
+        ("support", "plan", "plans", "contact", "enterprise"),
+        "support channels Standard email 24 hours Professional live chat Enterprise 24/7 phone dedicated account manager Slack connect",
+    ),
+    (
+        ("sla", "uptime", "response time", "performance"),
+        "API response time SLA 99th percentile under 300ms integration",
     ),
 ]
 
@@ -229,6 +274,7 @@ def _dedupe_faqs(faqs: List[dict], avoid_questions: Optional[List[str]] = None) 
         key = question.lower()
         if not question or not answer or key in seen:
             continue
+        seen.add(key)
 
         try:
             fallback_page = int(faq.get("page") or 1)
@@ -253,11 +299,10 @@ def _dedupe_faqs(faqs: List[dict], avoid_questions: Optional[List[str]] = None) 
             page = evidence[0].chunk.page
 
         cleaned.append({"question": question, "answer": answer, "page": page})
-        seen.add(key)
     return cleaned or fallback
 
 
-def _build_faqs(avoid_questions: Optional[List[str]] = None) -> List[dict]:
+def _build_faqs(avoid_questions: Optional[List[str]] = None, count: int = 12) -> List[dict]:
     seen_texts = set()
     combined = []
     for q in COVERAGE_QUERIES:
@@ -276,6 +321,17 @@ def _build_faqs(avoid_questions: Optional[List[str]] = None) -> List[dict]:
     if avoid_questions:
         avoid = "\n\nDo NOT generate questions already covered:\n" + "\n".join(f"- {q}" for q in avoid_questions)
 
+    if count == 1:
+        target_str = (
+            "Generate exactly 1 high-quality Q&A pair covering an uncovered topic or detail from the document.\n"
+            "Each answer must be supported by the supplied context and must not mention facts outside it."
+        )
+    else:
+        target_str = (
+            f"Generate exactly {count} diverse Q&A pairs covering different topics across the document.\n"
+            "Each answer must be supported by the supplied context and must not mention facts outside it."
+        )
+
     prompt = (
         f"You are a documentation expert. Generate FAQ entries from the document below.\n\n"
         f"DOCUMENT: {_state['filename']}\n"
@@ -284,22 +340,56 @@ def _build_faqs(avoid_questions: Optional[List[str]] = None) -> List[dict]:
         "- question: a specific, natural question a reader would ask\n"
         "- answer: concise accurate answer from the document only (2-4 sentences)\n"
         "- page: integer page number where the answer is found\n\n"
-        "Generate exactly 12 diverse Q&A pairs covering different topics across the document. "
-        "Each answer must be supported by the supplied context and must not mention facts outside it.\n"
+        f"{target_str}\n\n"
         'Return ONLY a raw JSON object of the form {"faqs": [...]}, no markdown.'
     )
 
     model = resolve_model(provider, "llama-3.1-8b-instant")
-    agent_result = run_tool_calling_agent(
-        client, model=model, initial_messages=[HumanMessage(content=prompt)],
-        tools=SEARCH_TOOL, run_tool=run_tool,
-        max_iterations=4, max_tool_calls_per_turn=2, max_total_tool_calls=4,
-    )
+    try:
+        agent_result = run_tool_calling_agent(
+            client, model=model, initial_messages=[HumanMessage(content=prompt)],
+            tools=SEARCH_TOOL, run_tool=run_tool,
+            max_iterations=4, max_tool_calls_per_turn=2, max_total_tool_calls=4,
+        )
+    except Exception as e:
+        fallback_models = []
+        if provider == "gemini":
+            fallback_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+        elif provider == "groq":
+            fallback_models = ["llama-3.3-70b-versatile"]
+
+        agent_result = None
+        for fb_model in fallback_models:
+            if fb_model == model:
+                continue
+            try:
+                agent_result = run_tool_calling_agent(
+                    client, model=fb_model, initial_messages=[HumanMessage(content=prompt)],
+                    tools=SEARCH_TOOL, run_tool=run_tool,
+                    max_iterations=4, max_tool_calls_per_turn=2, max_total_tool_calls=4,
+                )
+                if agent_result and agent_result.converged:
+                    break
+            except Exception:
+                continue
+        if agent_result is None:
+            raise
+
     faqs = _parse_faq_list(agent_result.content.strip()) if agent_result.converged and agent_result.content else []
     if not faqs:
-        # Retry once with a plain direct call
-        retry = client.bind(model=model, temperature=0.3).invoke([HumanMessage(content=prompt)])
-        faqs = _parse_faq_list(retry.content.strip())
+        # Retry once with a plain direct call with backoff
+        for attempt in range(2):
+            try:
+                retry = client.bind(model=model, temperature=0.3).invoke([HumanMessage(content=prompt)])
+                faqs = _parse_faq_list(retry.content.strip())
+                if faqs:
+                    break
+            except Exception:
+                if attempt == 0:
+                    import time
+                    time.sleep(2)
+                    continue
+                raise
     return _dedupe_faqs(faqs, avoid_questions=avoid_questions)
 
 
@@ -329,9 +419,29 @@ async def upload(file: UploadFile = File(...)):
     return {"status": "ok", "filename": file.filename, "chunks": len(chunks)}
 
 
-def _safe_build_faqs(avoid_questions: Optional[List[str]] = None) -> List[dict]:
+def _extract_pages_from_answer(text: str, max_page: int = 100) -> List[int]:
+    pages = set()
+    for m in re.finditer(r'(?:pages?|p\.)\s*([0-9]+(?:\s*(?:,|and|to|-)\s*[0-9]+)*)', text, re.IGNORECASE):
+        raw = m.group(1)
+        range_match = re.match(r'^(\d+)\s*(?:-|to)\s*(\d+)$', raw.strip(), re.IGNORECASE)
+        if range_match:
+            start, end = int(range_match.group(1)), int(range_match.group(2))
+            if start <= end:
+                for p in range(start, end + 1):
+                    if 1 <= p <= max_page:
+                        pages.add(p)
+                continue
+        for num in re.split(r'[,and\s]+', raw):
+            if num.isdigit():
+                val = int(num)
+                if 1 <= val <= max_page:
+                    pages.add(val)
+    return sorted(pages)
+
+
+def _safe_build_faqs(avoid_questions: Optional[List[str]] = None, count: int = 12) -> List[dict]:
     try:
-        return _build_faqs(avoid_questions)
+        return _build_faqs(avoid_questions, count=count)
     except Exception as e:
         raise_for_groq_error(e)
 
@@ -370,7 +480,7 @@ def regenerate_one(body: RegenerateRequest):
         raise HTTPException(400, f"Invalid index {idx}.")
     require_client(client)
     avoid = [f["question"] for i, f in enumerate(_state["faqs"]) if i != idx]
-    new_faqs = _safe_build_faqs(avoid_questions=avoid)
+    new_faqs = _safe_build_faqs(avoid_questions=avoid, count=1)
     if not new_faqs:
         raise HTTPException(502, "The AI could not generate a replacement question. Please retry.")
     _state["faqs"][idx] = new_faqs[0]
@@ -428,7 +538,7 @@ def ask(body: AskRequest):
                 existing.add(r.chunk.text)
         return build_context(extra) if extra else "No relevant content found for this query."
 
-    context = build_context(results)[:1800]
+    context = build_context(results)
     prompt = (
         f"You are a RAG QA agent answering from '{_state['filename']}'.\n"
         "Use ONLY retrieved document context. If the current context is not enough, call "
@@ -444,29 +554,79 @@ def ask(body: AskRequest):
     )
     try:
         model = resolve_model(provider, "llama-3.1-8b-instant")
-        agent_result = run_tool_calling_agent(
-            client,
-            model=model,
-            initial_messages=[HumanMessage(content=prompt)],
-            tools=SEARCH_TOOL,
-            run_tool=ask_tool,
-            max_iterations=4,
-            max_tool_calls_per_turn=2,
-            max_total_tool_calls=4,
-        )
+        try:
+            agent_result = run_tool_calling_agent(
+                client,
+                model=model,
+                initial_messages=[HumanMessage(content=prompt)],
+                tools=SEARCH_TOOL,
+                run_tool=ask_tool,
+                max_iterations=4,
+                max_tool_calls_per_turn=2,
+                max_total_tool_calls=4,
+            )
+        except Exception:
+            fallback_models = []
+            if provider == "gemini":
+                fallback_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+            elif provider == "groq":
+                fallback_models = ["llama-3.3-70b-versatile"]
+            agent_result = None
+            for fb_model in fallback_models:
+                if fb_model == model:
+                    continue
+                try:
+                    agent_result = run_tool_calling_agent(
+                        client,
+                        model=fb_model,
+                        initial_messages=[HumanMessage(content=prompt)],
+                        tools=SEARCH_TOOL,
+                        run_tool=ask_tool,
+                        max_iterations=4,
+                        max_tool_calls_per_turn=2,
+                        max_total_tool_calls=4,
+                    )
+                    if agent_result and agent_result.converged:
+                        break
+                except Exception:
+                    continue
+            if agent_result is None:
+                raise
+
         if agent_result.converged and agent_result.content:
             answer = agent_result.content.strip()
         else:
-            response = _ask_groq(prompt)
+            response = _ask_llm(prompt)
             answer = response.content.strip()
     except Exception as e:
         raise_for_groq_error(e)
-    pages = sorted({r.chunk.page for r in gathered})
+
+    page_count = max((c.page for c in _state["chunks"]), default=0)
+    cited_pages = _extract_pages_from_answer(answer, max_page=page_count)
+
+    is_not_found = any(phrase in answer.lower() for phrase in [
+        "not found in the document", "not found in document", "no relevant content found",
+        "not mentioned in the document", "not mentioned in document", "does not mention",
+        "does not contain"
+    ])
+    if is_not_found:
+        pages = []
+    elif cited_pages:
+        pages = cited_pages
+    else:
+        top_relevant = _retrieve_for_question(body.question, top_k=2)
+        if top_relevant and is_grounded(top_relevant):
+            pages = sorted({r.chunk.page for r in top_relevant})
+        else:
+            pages = sorted({r.chunk.page for r in gathered})
     return {"answer": answer, "pages": pages}
 
 
-def _ask_groq(prompt: str):
+def _ask_llm(prompt: str):
     return client.bind(model=resolve_model(provider, "llama-3.1-8b-instant"), temperature=0).invoke(
         [HumanMessage(content=prompt)]
     )
+
+
+_ask_groq = _ask_llm
 
