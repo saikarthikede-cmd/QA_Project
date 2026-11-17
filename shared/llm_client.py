@@ -21,7 +21,7 @@ OPENAI_DEFAULT_MODEL = "gpt-4o-mini"
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 # gemini-2.5-flash was shut down by Google on 2026-10-16; override with the GEMINI_MODEL
 # env var if Google retires this one too (https://ai.google.dev/gemini-api/docs/deprecations).
-GEMINI_DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
+GEMINI_DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
 DISPLAY_NAME = {"groq": "Groq", "openai": "OpenAI", "gemini": "Gemini"}
 PROVIDERS = {
     "groq": (GROQ_DEFAULT_MODEL, GROQ_BASE_URL),
