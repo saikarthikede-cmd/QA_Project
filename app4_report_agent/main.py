@@ -45,7 +45,7 @@ class ChatRequest(BaseModel):
     question: str
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
-MODEL = "llama-3.3-70b-versatile"
+MODEL = "openai/gpt-oss-120b"
 
 TOOLS = [
     {

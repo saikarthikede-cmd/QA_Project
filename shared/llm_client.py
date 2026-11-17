@@ -16,7 +16,7 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
 
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
-GROQ_DEFAULT_MODEL = "llama-3.3-70b-versatile"
+GROQ_DEFAULT_MODEL = "openai/gpt-oss-120b"
 OPENAI_DEFAULT_MODEL = "gpt-4o-mini"
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 # gemini-2.5-flash was shut down by Google on 2026-10-16; override with the GEMINI_MODEL

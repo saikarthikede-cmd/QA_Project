@@ -17,6 +17,16 @@ $services = @(
 
 New-Item -ItemType Directory -Force -Path (Join-Path $Root "logs") | Out-Null
 
+# Prefer the project's virtualenv so the launcher works without the py launcher.
+$venvPython = Join-Path $Root ".venv\Scripts\python.exe"
+if (Test-Path $venvPython) {
+    $pythonExe = $venvPython
+    $pythonArgs = @()
+} else {
+    $pythonExe = "py"
+    $pythonArgs = @("-3.11")
+}
+
 if (-not $NoStop) {
     $ports = $services | ForEach-Object { $_.Port }
     $listeners = Get-NetTCPConnection -LocalPort $ports -State Listen -ErrorAction SilentlyContinue |
@@ -44,8 +54,8 @@ foreach ($svc in $services) {
     $errLog = Join-Path $Root ("logs\live{0}.err.log" -f $svc.Port)
 
     Start-Process `
-        -FilePath "py" `
-        -ArgumentList @("-3.11", "-m", "uvicorn", "main:app", "--port", "$($svc.Port)") `
+        -FilePath $pythonExe `
+        -ArgumentList ($pythonArgs + @("-m", "uvicorn", "main:app", "--port", "$($svc.Port)")) `
         -WorkingDirectory $workDir `
         -RedirectStandardOutput $outLog `
         -RedirectStandardError $errLog `

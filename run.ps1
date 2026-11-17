@@ -18,6 +18,13 @@ if (-not $apps.ContainsKey($App)) {
 }
 
 $cfg = $apps[$App]
-Write-Host "Starting App $App — $($cfg.name) on http://localhost:$($cfg.port)" -ForegroundColor Cyan
+Write-Host "Starting App $App - $($cfg.name) on http://localhost:$($cfg.port)" -ForegroundColor Cyan
 Set-Location (Join-Path $PSScriptRoot $cfg.dir)
-py -3.11 -m uvicorn main:app --reload --port $cfg.port
+
+# Prefer the project's virtualenv so the launcher works without the py launcher.
+$venvPython = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
+if (Test-Path $venvPython) {
+    & $venvPython -m uvicorn main:app --reload --port $cfg.port
+} else {
+    py -3.11 -m uvicorn main:app --reload --port $cfg.port
+}

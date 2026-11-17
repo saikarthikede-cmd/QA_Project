@@ -96,13 +96,25 @@ def extract_pages(pdf_bytes: bytes) -> List[tuple]:
 
     Raises ValueError for scanned/image PDFs with no extractable text.
     """
-    reader = PdfReader(io.BytesIO(pdf_bytes))
-    pages: List[tuple] = []
-    total_chars = 0
-    for i, page in enumerate(reader.pages, start=1):
-        text = (page.extract_text() or "").strip()
-        pages.append((i, text))
-        total_chars += len(text)
+    try:
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        pages: List[tuple] = []
+        total_chars = 0
+        for i, page in enumerate(reader.pages, start=1):
+            text = (page.extract_text() or "").strip()
+            pages.append((i, text))
+            total_chars += len(text)
+    except ValueError:
+        raise
+    except Exception as e:
+        # pypdf raises its own exception types (PdfReadError, PdfStreamError,
+        # WrongPasswordError, ...) for corrupt, truncated, or encrypted input.
+        # Normalize them to ValueError so every app's upload handler can turn
+        # them into a clear 422 instead of an unhandled 500.
+        raise ValueError(
+            "Could not read this PDF. It may be corrupted, password-protected, "
+            "or not a valid PDF file."
+        ) from e
 
     if total_chars < 50:
         raise ValueError(

@@ -7,6 +7,8 @@ import io, sys
 from pathlib import Path
 from typing import List
 
+import numpy as np
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -45,7 +47,14 @@ _state: dict = {
 }
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
-MODEL = "llama-3.3-70b-versatile"
+MODEL = "openai/gpt-oss-120b"
+
+# Whole-document similarity gate. Two versions of the same document score well
+# above this even when heavily edited; genuinely unrelated documents (a resume
+# vs. a policy, say) score well below it. Used to fail fast with a clear
+# "no comparable sections" message instead of asking the model to diff apples
+# and oranges.
+MIN_DOC_SIMILARITY = 0.50
 
 SEARCH_TOOL = [
     {
@@ -129,6 +138,24 @@ def _build_metadata(pdf_bytes: bytes, pages: list, chunks: list, filename: str) 
     }
 
 
+def _mean_document_embedding(chunks: list) -> np.ndarray | None:
+    vectors = [c.embedding for c in chunks if getattr(c, "embedding", None) is not None]
+    if not vectors:
+        return None
+    mean = np.mean(np.vstack(vectors), axis=0)
+    norm = float(np.linalg.norm(mean))
+    return mean / norm if norm else None
+
+
+def _document_similarity() -> float | None:
+    """Cosine similarity between the two documents' mean chunk embeddings."""
+    emb_a = _mean_document_embedding(_state["doc_a"]["chunks"])
+    emb_b = _mean_document_embedding(_state["doc_b"]["chunks"])
+    if emb_a is None or emb_b is None:
+        return None
+    return float(np.dot(emb_a, emb_b))
+
+
 @app.post("/upload-a")
 async def upload_a(file: UploadFile = File(...)):
     if not file.filename.lower().endswith(".pdf"):
@@ -179,6 +206,15 @@ def analyze():
 
 
 def _run_analyze():
+    document_similarity = _document_similarity()
+    if document_similarity is not None and document_similarity < MIN_DOC_SIMILARITY:
+        raise HTTPException(
+            422,
+            "These documents appear to cover unrelated subjects "
+            f"(similarity {document_similarity:.2f}). No comparable sections were found to diff. "
+            "Please upload two versions of the same document.",
+        )
+
     # RAG: for each topic, retrieve corresponding sections from BOTH documents.
     # Batch-encode all topic queries once instead of embedding each one twice
     # (once per document) inside the loop.
@@ -268,6 +304,8 @@ def _run_analyze():
     data["doc_a"] = _state["doc_a"]["filename"]
     data["doc_b"] = _state["doc_b"]["filename"]
     data["topics_compared"] = len(comparison_blocks)
+    if document_similarity is not None:
+        data["document_similarity"] = round(document_similarity, 3)
     return data
 
 
