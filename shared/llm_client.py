@@ -72,7 +72,7 @@ DISPLAY_NAME = {
     "anthropic": "Claude",
     "codevector": "CodeVector",
 }
-0PROVIDERS = {
+PROVIDERS = {
     "groq": (GROQ_DEFAULT_MODEL, GROQ_BASE_URL),
     "openai": (OPENAI_DEFAULT_MODEL, None),
     "gemini": (GEMINI_DEFAULT_MODEL, GEMINI_BASE_URL),
