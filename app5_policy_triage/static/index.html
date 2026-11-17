@@ -5,102 +5,540 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>App 5 — Policy Triage Agent</title>
 <style>
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:32px 16px}
-  h1{font-size:1.6rem;font-weight:700;color:#f472b6;margin-bottom:4px}
-  .subtitle{color:#94a3b8;font-size:.9rem;margin-bottom:32px}
-  .card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:24px;width:100%;max-width:800px;margin-bottom:20px}
-  .card h2{font-size:1rem;font-weight:600;color:#cbd5e1;margin-bottom:16px;display:flex;align-items:center;gap:8px}
-  .upload-area{border:2px dashed #334155;border-radius:8px;padding:24px;text-align:center;cursor:pointer;transition:border-color .2s}
-  .upload-area:hover{border-color:#f472b6}
-  .upload-area input{display:none}
-  .status{font-size:.85rem;color:#94a3b8;margin-top:10px;min-height:20px}
-  .status.ok{color:#4ade80} .status.err{color:#f87171}
-  .triage-section{display:none}
-  .triage-section.active{display:block}
-  textarea{width:100%;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#e2e8f0;padding:12px;font-size:.9rem;resize:vertical;min-height:120px}
-  textarea:focus{outline:none;border-color:#f472b6}
-  .btn{background:#be185d;color:#fff;border:none;border-radius:8px;padding:12px 28px;font-size:.95rem;cursor:pointer;font-weight:600;transition:background .2s;margin-top:10px}
-  .btn:hover:not(:disabled){background:#9d174d}
-  .btn:disabled{background:#334155;color:#64748b;cursor:not-allowed}
-  .dl-btn{background:#0f172a;color:#f472b6;border:1px solid #f472b6;border-radius:8px;padding:7px 16px;font-size:.82rem;cursor:pointer;margin-top:10px;display:none}
-  .dl-btn:hover{background:#f472b6;color:#0f172a}
-  .result{display:none;margin-top:20px}
-  .decision-banner{border-radius:10px;padding:16px 22px;font-size:1.1rem;font-weight:700;text-align:center;margin-bottom:16px}
-  .escalate{background:#fee2e2;color:#991b1b;border:2px solid #fca5a5}
-  .auto-resolve{background:#d1fae5;color:#065f46;border:2px solid #6ee7b7}
-  .result-card{background:#0f172a;border:1px solid #334155;border-radius:8px;padding:16px;margin-bottom:12px}
-  .result-card h3{font-size:.9rem;font-weight:700;color:#f472b6;margin-bottom:10px}
-  .result-card p{font-size:.88rem;line-height:1.7;white-space:pre-wrap}
-  .tool-step{font-size:.78rem;color:#64748b;background:#0f172a;border:1px solid #1e293b;border-radius:6px;padding:8px 12px;margin-bottom:6px}
-  .tool-step strong{color:#94a3b8}
-  .page-pills{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
-  .page-pill{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:2px 10px;font-size:.75rem;color:#f472b6}
-  .loader{display:none;text-align:center;color:#94a3b8;font-size:.85rem;margin-top:12px}
-  .loader.on{display:block}
-  .badge{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:#be185d;font-size:.7rem;font-weight:700}
-  .scenario-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px;margin-top:4px}
-  .scenario-card{background:#0f172a;border:1px solid #334155;border-radius:8px;padding:12px 14px;cursor:pointer;transition:border-color .15s}
-  .scenario-card:hover{border-color:#f472b6}
-  .scenario-outcome{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;display:flex;align-items:center;gap:5px}
-  .outcome-resolve{color:#4ade80}.outcome-escalate{color:#f87171}.outcome-depends{color:#fbbf24}
-  .scenario-name{font-size:.85rem;font-weight:600;color:#e2e8f0;margin-bottom:5px}
-  .scenario-preview{font-size:.74rem;color:#64748b;line-height:1.4;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
-  .scenario-use{font-size:.7rem;color:#475569;margin-top:5px;font-style:italic}
-  .chat-section{display:none}
-  .chat-section.active{display:block}
-  .chat-log{max-height:360px;overflow-y:auto;margin-bottom:14px;display:flex;flex-direction:column;gap:10px}
-  .chat-msg{padding:10px 14px;border-radius:10px;font-size:.86rem;line-height:1.5;max-width:85%}
-  .chat-msg.user{background:#be185d;color:#fff;align-self:flex-end}
-  .chat-msg.bot{background:#0f172a;border:1px solid #334155;color:#cbd5e1;align-self:flex-start}
-  .chat-msg .chat-pages{font-size:.72rem;color:#f472b6;margin-top:6px}
-  .chat-input-row{display:flex;gap:8px}
-  .chat-input{flex:1;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:10px 12px;color:#e2e8f0;font-size:.88rem}
-  .chat-input:focus{outline:none;border-color:#f472b6}
-  .chip-row{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:12px}
-  .chip{background:#0f172a;border:1px solid #334155;border-radius:20px;padding:5px 13px;font-size:.75rem;color:#94a3b8;cursor:pointer;transition:all .15s}
-  .chip:hover{border-color:#f472b6;color:#f472b6}
-  .chip-group-label{font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#475569;width:100%;margin-top:4px;margin-bottom:2px}
+  :root {
+    --bg-main: #0a0e17;
+    --card-bg: rgba(30, 41, 59, 0.7);
+    --card-border: rgba(51, 65, 85, 0.6);
+    --accent: #f472b6;
+    --accent-hover: #ec4899;
+    --accent-glow: rgba(244, 114, 182, 0.25);
+    --text-primary: #f8fafc;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
+    --success: #34d399;
+    --success-bg: rgba(16, 185, 129, 0.15);
+    --success-border: rgba(52, 211, 153, 0.4);
+    --danger: #f87171;
+    --danger-bg: rgba(239, 68, 68, 0.15);
+    --danger-border: rgba(248, 113, 113, 0.4);
+    --warning: #fbbf24;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: radial-gradient(circle at 50% 0%, #1e1b4b 0%, var(--bg-main) 70%);
+    background-attachment: fixed;
+    color: var(--text-primary);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 32px 16px 64px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .header-container {
+    width: 100%;
+    max-width: 860px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 24px;
+    gap: 16px;
+  }
+  .title-group h1 {
+    font-size: 1.85rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    background: linear-gradient(135deg, #f472b6 0%, #c084fc 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 6px;
+  }
+  .title-group .subtitle {
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+    line-height: 1.5;
+  }
+  .provider-pill {
+    background: rgba(30, 41, 59, 0.8);
+    border: 1px solid var(--card-border);
+    border-radius: 9999px;
+    padding: 6px 14px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--accent);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    backdrop-filter: blur(8px);
+    transition: all 0.2s ease;
+    white-space: nowrap;
+  }
+  .provider-pill:hover {
+    border-color: var(--accent);
+    box-shadow: 0 0 12px var(--accent-glow);
+  }
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 16px;
+    padding: 24px;
+    width: 100%;
+    max-width: 860px;
+    margin-bottom: 24px;
+    backdrop-filter: blur(12px);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  }
+  .card h2 {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: #e2e8f0;
+    margin-bottom: 18px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #f472b6, #db2777);
+    color: #fff;
+    font-size: 0.75rem;
+    font-weight: 700;
+    box-shadow: 0 0 10px rgba(244, 114, 182, 0.4);
+  }
+  .upload-area {
+    border: 2px dashed rgba(244, 114, 182, 0.3);
+    border-radius: 12px;
+    padding: 32px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    background: rgba(15, 23, 42, 0.5);
+  }
+  .upload-area:hover, .upload-area.dragover {
+    border-color: var(--accent);
+    background: rgba(244, 114, 182, 0.05);
+    box-shadow: 0 0 20px rgba(244, 114, 182, 0.15);
+  }
+  .upload-area input { display: none; }
+  .status {
+    font-size: 0.88rem;
+    color: var(--text-secondary);
+    margin-top: 12px;
+    min-height: 20px;
+  }
+  .status.ok { color: var(--success); font-weight: 500; }
+  .status.err { color: var(--danger); font-weight: 500; }
+  .file-loaded-banner {
+    display: none;
+    align-items: center;
+    justify-content: space-between;
+    background: rgba(15, 23, 42, 0.7);
+    border: 1px solid rgba(52, 211, 153, 0.3);
+    border-radius: 12px;
+    padding: 14px 18px;
+  }
+  .file-loaded-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .file-loaded-name {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #f1f5f9;
+  }
+  .file-loaded-info {
+    font-size: 0.78rem;
+    color: var(--success);
+  }
+  .btn-secondary {
+    background: rgba(51, 65, 85, 0.6);
+    color: #cbd5e1;
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    padding: 6px 12px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .btn-secondary:hover {
+    background: rgba(71, 85, 105, 0.8);
+    color: #fff;
+  }
+  .triage-section, .chat-section { display: none; }
+  .triage-section.active, .chat-section.active { display: block; }
+  .scenario-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .scenario-card {
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid var(--card-border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  .scenario-card:hover {
+    border-color: var(--accent);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  }
+  .scenario-outcome {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .outcome-resolve { color: var(--success); }
+  .outcome-escalate { color: var(--danger); }
+  .outcome-depends { color: var(--warning); }
+  .scenario-name {
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: #f1f5f9;
+    margin-bottom: 5px;
+  }
+  .scenario-preview {
+    font-size: 0.76rem;
+    color: var(--text-secondary);
+    line-height: 1.4;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .scenario-use {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    margin-top: 6px;
+    font-style: italic;
+  }
+  textarea {
+    width: 100%;
+    background: rgba(15, 23, 42, 0.8);
+    border: 1px solid var(--card-border);
+    border-radius: 10px;
+    color: #f1f5f9;
+    padding: 14px;
+    font-size: 0.92rem;
+    line-height: 1.5;
+    resize: vertical;
+    min-height: 110px;
+    font-family: inherit;
+    transition: border-color 0.2s;
+  }
+  textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 12px var(--accent-glow);
+  }
+  .actions-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 12px;
+    gap: 12px;
+  }
+  .btn {
+    background: linear-gradient(135deg, #db2777 0%, #be185d 100%);
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    padding: 12px 28px;
+    font-size: 0.95rem;
+    cursor: pointer;
+    font-weight: 700;
+    box-shadow: 0 4px 16px rgba(219, 39, 119, 0.35);
+    transition: all 0.2s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .btn:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px rgba(219, 39, 119, 0.5);
+  }
+  .btn:disabled {
+    background: #334155;
+    color: #64748b;
+    cursor: not-allowed;
+    box-shadow: none;
+    transform: none;
+  }
+  .dl-btn {
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    border-radius: 10px;
+    padding: 10px 20px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: none;
+  }
+  .dl-btn:hover {
+    background: var(--accent);
+    color: #0f172a;
+    box-shadow: 0 0 16px var(--accent-glow);
+  }
+  .result { display: none; margin-top: 24px; }
+  .decision-banner {
+    border-radius: 12px;
+    padding: 16px 24px;
+    font-size: 1.25rem;
+    font-weight: 800;
+    text-align: center;
+    margin-bottom: 18px;
+    letter-spacing: 0.04em;
+    backdrop-filter: blur(8px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+  }
+  .decision-banner.escalate {
+    background: var(--danger-bg);
+    color: #fca5a5;
+    border: 2px solid var(--danger-border);
+    box-shadow: 0 0 24px rgba(239, 68, 68, 0.25);
+  }
+  .decision-banner.auto-resolve {
+    background: var(--success-bg);
+    color: #6ee7b7;
+    border: 2px solid var(--success-border);
+    box-shadow: 0 0 24px rgba(16, 185, 129, 0.25);
+  }
+  .result-card {
+    background: rgba(15, 23, 42, 0.7);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    padding: 18px;
+    margin-bottom: 14px;
+  }
+  .result-card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+  .result-card h3 {
+    font-size: 0.92rem;
+    font-weight: 700;
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .result-card p {
+    font-size: 0.9rem;
+    line-height: 1.6;
+    color: #cbd5e1;
+    white-space: pre-wrap;
+  }
+  .copy-btn {
+    background: transparent;
+    border: 1px solid var(--card-border);
+    color: var(--text-secondary);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 0.72rem;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .copy-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .tool-step {
+    font-size: 0.82rem;
+    color: #94a3b8;
+    background: rgba(15, 23, 42, 0.9);
+    border: 1px solid rgba(51, 65, 85, 0.6);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 8px;
+  }
+  .tool-step strong { color: #f1f5f9; font-weight: 600; }
+  .page-pills {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+  }
+  .page-pill {
+    background: rgba(244, 114, 182, 0.1);
+    border: 1px solid rgba(244, 114, 182, 0.4);
+    border-radius: 12px;
+    padding: 3px 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--accent);
+  }
+  .loader {
+    display: none;
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    margin-top: 14px;
+  }
+  .loader.on { display: block; }
+  .chat-log {
+    max-height: 400px;
+    overflow-y: auto;
+    margin-bottom: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding-right: 4px;
+  }
+  .chat-msg {
+    padding: 12px 16px;
+    border-radius: 12px;
+    font-size: 0.9rem;
+    line-height: 1.55;
+    max-width: 85%;
+  }
+  .chat-msg.user {
+    background: linear-gradient(135deg, #db2777 0%, #be185d 100%);
+    color: #fff;
+    align-self: flex-end;
+    border-bottom-right-radius: 2px;
+  }
+  .chat-msg.bot {
+    background: rgba(15, 23, 42, 0.85);
+    border: 1px solid var(--card-border);
+    color: #cbd5e1;
+    align-self: flex-start;
+    border-bottom-left-radius: 2px;
+  }
+  .chat-msg .chat-pages {
+    font-size: 0.75rem;
+    color: var(--accent);
+    margin-top: 8px;
+    font-weight: 600;
+  }
+  .chat-input-row { display: flex; gap: 10px; }
+  .chat-input {
+    flex: 1;
+    background: rgba(15, 23, 42, 0.8);
+    border: 1px solid var(--card-border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    color: #f1f5f9;
+    font-size: 0.9rem;
+  }
+  .chat-input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 12px var(--accent-glow);
+  }
+  .chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .chip {
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid var(--card-border);
+    border-radius: 9999px;
+    padding: 5px 14px;
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .chip:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: rgba(244, 114, 182, 0.08);
+  }
+  .chip-group-label {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    width: 100%;
+    margin-top: 6px;
+    margin-bottom: 2px;
+  }
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 </head>
 <body>
-<h1>PDF Policy Triage Agent</h1>
-<p class="subtitle">Upload policy PDF → paste a support ticket → agent decides escalate or resolve, drafts a grounded reply.</p>
+
+<div class="header-container">
+  <div class="title-group">
+    <h1>PDF Policy Triage Agent</h1>
+    <p class="subtitle">Upload policy PDF → paste support ticket → autonomous agent reasons over rules, sentiment, and SLAs to decide Auto-Resolve vs Escalate.</p>
+  </div>
+  <div class="provider-pill" id="providerPill" onclick="showKeyModalPrompt()" title="Click to view or change LLM API key">
+    ⚡ <span id="providerPillText">AI: Initializing...</span>
+  </div>
+</div>
 
 <div class="card">
-  <h2><span class="badge">1</span> Upload policy PDF</h2>
+  <h2><span class="badge">1</span> Upload Policy PDF</h2>
   <div class="upload-area" id="dropZone">
     <label for="pdfInput">
-      <div style="font-size:2rem">📋</div>
-      <div style="margin-top:8px;font-weight:600">Drop policy PDF here or click to browse</div>
+      <div style="font-size:2.2rem">📋</div>
+      <div style="margin-top:10px;font-weight:600;color:#f1f5f9">Drop policy PDF here or click to browse</div>
+      <div style="font-size:0.8rem;color:var(--text-muted);margin-top:4px">Accepts .pdf up to 50 MB</div>
       <input type="file" id="pdfInput" accept=".pdf"/>
     </label>
+  </div>
+  <div class="file-loaded-banner" id="fileLoaded">
+    <div class="file-loaded-left">
+      <span style="font-size:1.8rem">📑</span>
+      <div>
+        <div class="file-loaded-name" id="loadedFilename">policy.pdf</div>
+        <div class="file-loaded-info" id="loadedDetails">Indexed and ready for triage</div>
+      </div>
+    </div>
+    <button class="btn-secondary" onclick="showUploadZone()">Change File</button>
   </div>
   <div class="status" id="uploadStatus"></div>
 </div>
 
 <div class="card triage-section" id="triageSection">
-  <h2><span class="badge">2</span> Paste support ticket</h2>
-  <div style="font-size:.8rem;color:#64748b;margin-bottom:10px">Click any scenario card to load it — or write your own ticket below.</div>
-  <div class="scenario-grid" style="margin-bottom:16px">
+  <h2><span class="badge">2</span> Support Ticket & Decision</h2>
+  <div style="font-size:0.82rem;color:var(--text-secondary);margin-bottom:12px">Click any scenario card below to load a curated test ticket — or enter your own ticket text.</div>
+  
+  <div class="scenario-grid">
     <div class="scenario-card" onclick="loadTicket(0)">
       <div class="scenario-outcome outcome-resolve">✅ Expected: AUTO-RESOLVE</div>
       <div class="scenario-name">Simple Refund Request</div>
       <div class="scenario-preview">I'd like to cancel my subscription and receive a refund. I signed up 3 days ago and haven't used the service at all.</div>
-      <div class="scenario-use">Tests: policy retrieval + SLA lookup</div>
+      <div class="scenario-use">Tests: policy retrieval + billing SLA lookup</div>
     </div>
     <div class="scenario-card" onclick="loadTicket(1)">
       <div class="scenario-outcome outcome-escalate">🚨 Expected: ESCALATE (Legal)</div>
       <div class="scenario-name">Legal Threat</div>
       <div class="scenario-preview">I am consulting with my lawyer about filing a lawsuit against your company. You have failed to resolve this issue for 3 months and I will pursue legal action immediately.</div>
-      <div class="scenario-use">Tests: legal keyword → always escalate rule</div>
+      <div class="scenario-use">Tests: legal keyword → immediate escalation</div>
     </div>
     <div class="scenario-card" onclick="loadTicket(2)">
       <div class="scenario-outcome outcome-escalate">🚨 Expected: ESCALATE (Security)</div>
       <div class="scenario-name">Account Breach Claim</div>
       <div class="scenario-preview">Someone hacked into my account last night and made $800 in unauthorized purchases. My personal data and payment details may have been compromised.</div>
-      <div class="scenario-use">Tests: security SLA + escalation logic</div>
+      <div class="scenario-use">Tests: security SLA + immediate breach routing</div>
     </div>
     <div class="scenario-card" onclick="loadTicket(3)">
       <div class="scenario-outcome outcome-escalate">🚨 Expected: ESCALATE (Sentiment)</div>
@@ -121,15 +559,20 @@
       <div class="scenario-use">Tests: fraud keywords + sentiment + SLA</div>
     </div>
   </div>
+
   <textarea id="ticketInput" placeholder="Paste the support ticket here or click a scenario card above…"></textarea>
-  <button class="btn" id="triageBtn" onclick="runTriage()">▶ Run Triage Agent</button>
-  <div class="loader" id="loader">⏳ Agent searching policy document…</div>
+  
+  <div class="actions-row">
+    <button class="btn" id="triageBtn" onclick="runTriage()">▶ Run Triage Agent</button>
+    <button class="dl-btn" id="dlBtn" onclick="downloadResult()">⬇ Download Triage Report</button>
+  </div>
+  
+  <div class="loader" id="loader">⏳ Autonomous agent inspecting policy document and SLAs…</div>
   <div class="result" id="result"></div>
-  <button class="dl-btn" id="dlBtn" onclick="downloadResult()">⬇ Download Triage Result</button>
 </div>
 
 <div class="card chat-section" id="chatSection">
-  <h2><span class="badge">3</span> Ask Follow-Up Questions</h2>
+  <h2><span class="badge">3</span> Policy & Decision Follow-Up</h2>
   <div class="chip-row">
     <span class="chip-group-label">About the policy</span>
     <span class="chip" onclick="fillChat5(this)">What is the refund policy?</span>
@@ -148,170 +591,263 @@
 </div>
 
 <script>
-const pdfInput=document.getElementById('pdfInput');
-const uploadStatus=document.getElementById('uploadStatus');
-const triageSection=document.getElementById('triageSection');
-const loader=document.getElementById('loader');
-const result=document.getElementById('result');
-const triageBtn=document.getElementById('triageBtn');
-const dlBtn=document.getElementById('dlBtn');
-let _lastResult=null;
+const pdfInput = document.getElementById('pdfInput');
+const uploadStatus = document.getElementById('uploadStatus');
+const triageSection = document.getElementById('triageSection');
+const chatSection = document.getElementById('chatSection');
+const loader = document.getElementById('loader');
+const result = document.getElementById('result');
+const triageBtn = document.getElementById('triageBtn');
+const dlBtn = document.getElementById('dlBtn');
+const dropZone = document.getElementById('dropZone');
+const fileLoaded = document.getElementById('fileLoaded');
+const loadedFilename = document.getElementById('loadedFilename');
+const loadedDetails = document.getElementById('loadedDetails');
 
-const dropZone=document.getElementById('dropZone');
-['dragenter','dragover'].forEach(e=>dropZone.addEventListener(e,ev=>{ev.preventDefault();dropZone.style.borderColor='#f472b6'}));
-['dragleave','drop'].forEach(e=>dropZone.addEventListener(e,ev=>{ev.preventDefault();dropZone.style.borderColor='#334155'}));
-dropZone.addEventListener('drop',ev=>{const f=ev.dataTransfer.files[0];if(f)uploadFile(f)});
-pdfInput.addEventListener('change',()=>{if(pdfInput.files[0])uploadFile(pdfInput.files[0])});
+let _lastResult = null;
+let _docName = '';
 
-async function uploadFile(file){
-  if(file.size>50*1024*1024){uploadStatus.className='status err';uploadStatus.textContent='✗ File too large ('+(file.size/1024/1024).toFixed(1)+' MB). Maximum is 50 MB.';return;}
-  uploadStatus.className='status';
-  uploadStatus.textContent='Processing…';
-  const fd=new FormData(); fd.append('file',file);
-  try{
-    const r=await fetch('/upload',{method:'POST',body:fd});
-    const d=await r.json();
-    if(!r.ok) throw new Error(d.detail||'Upload failed');
-    uploadStatus.className='status ok';
-    uploadStatus.textContent=`✓ "${d.filename}" — ${d.chunks} chunks indexed.`;
+['dragenter','dragover'].forEach(e => dropZone.addEventListener(e, ev => {
+  ev.preventDefault();
+  dropZone.classList.add('dragover');
+}));
+['dragleave','drop'].forEach(e => dropZone.addEventListener(e, ev => {
+  ev.preventDefault();
+  dropZone.classList.remove('dragover');
+}));
+dropZone.addEventListener('drop', ev => {
+  const f = ev.dataTransfer.files[0];
+  if (f) uploadFile(f);
+});
+pdfInput.addEventListener('change', () => {
+  if (pdfInput.files[0]) uploadFile(pdfInput.files[0]);
+});
+
+function showUploadZone() {
+  dropZone.style.display = 'block';
+  fileLoaded.style.display = 'none';
+  uploadStatus.textContent = '';
+  pdfInput.value = '';
+}
+
+async function uploadFile(file) {
+  if (file.size > 50 * 1024 * 1024) {
+    uploadStatus.className = 'status err';
+    uploadStatus.textContent = '✗ File too large (' + (file.size / 1024 / 1024).toFixed(1) + ' MB). Maximum is 50 MB.';
+    return;
+  }
+  uploadStatus.className = 'status';
+  uploadStatus.textContent = 'Indexing document chunks…';
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const r = await fetch('/upload', { method: 'POST', body: fd });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || 'Upload failed');
+    _docName = d.filename;
+    uploadStatus.className = 'status ok';
+    uploadStatus.textContent = `✓ Indexed ${d.chunks} chunks successfully.`;
+    dropZone.style.display = 'none';
+    fileLoaded.style.display = 'flex';
+    loadedFilename.textContent = d.filename;
+    loadedDetails.textContent = `${d.chunks} policy chunks indexed`;
     triageSection.classList.add('active');
-    dlBtn.style.display='none';
-    document.getElementById('chatSection').classList.add('active');
-    document.getElementById('chatLog').innerHTML='';
-  }catch(e){
-    uploadStatus.className='status err';
-    uploadStatus.textContent='✗ '+e.message;
+    chatSection.classList.add('active');
+    document.getElementById('chatLog').innerHTML = '';
+    result.style.display = 'none';
+    dlBtn.style.display = 'none';
+    _lastResult = null;
+  } catch (e) {
+    uploadStatus.className = 'status err';
+    uploadStatus.textContent = '✗ ' + e.message;
   }
 }
 
-function downloadResult(){
-  if(!_lastResult) return;
-  const {jsPDF}=window.jspdf;
-  const doc=new jsPDF();
-  const W=170,ml=20;
-  let y=20;
-  const nl=(n=6)=>{y+=n;};
-  const addLine=(text,size=11,style='normal',color=[30,30,30])=>{
-    doc.setFontSize(size);doc.setFont('helvetica',style);doc.setTextColor(...color);
-    const lines=doc.splitTextToSize(String(text),W);
-    if(y+lines.length*size*0.4>280){doc.addPage();y=20;}
-    doc.text(lines,ml,y);y+=lines.length*(size*0.45);
-  };
-  const isEsc=_lastResult.decision==='ESCALATE';
-  addLine('Policy Triage Report',16,'bold',[190,24,93]);
-  nl(2);
-  addLine('Generated: '+new Date().toLocaleString(),9,'normal',[120,120,120]);
-  nl(4);
-  doc.setDrawColor(200,200,200);doc.line(ml,y,ml+W,y);nl(6);
-  addLine('DECISION: '+_lastResult.decision,14,'bold',isEsc?[153,27,27]:[6,95,70]);
-  nl(6);
-  addLine('TICKET',10,'bold',[60,60,60]);nl(2);
-  addLine(document.getElementById('ticketInput').value,10);nl(6);
-  addLine('REASON (from policy)',10,'bold',[60,60,60]);nl(2);
-  addLine(_lastResult.reason||'',10);
-  const _pp=toPageArray(_lastResult.policy_pages);if(_pp.length){nl(3);addLine('Pages cited: '+_pp.join(', '),9,'normal',[120,120,120]);}
-  nl(6);
-  addLine('DRAFT REPLY TO CUSTOMER',10,'bold',[60,60,60]);nl(2);
-  addLine(_lastResult.draft_reply||'',10);nl(6);
-  if((_lastResult.agent_steps||[]).length){
-    addLine('AGENT TOOL CALLS',10,'bold',[60,60,60]);nl(2);
-    (_lastResult.agent_steps||[]).forEach((s,i)=>{
-      addLine((i+1)+'. ['+s.tool+'] "'+s.query+'"',9);nl(1);
-      addLine('   '+s.result_preview.slice(0,120)+'...',8,'normal',[120,120,120]);nl(3);
-    });
-  }
-  const ts=new Date().toISOString().replace(/[:.]/g,'-');
-  doc.save('triage_result_'+ts+'.pdf');
-}
-
-async function runTriage(){
-  const ticket=document.getElementById('ticketInput').value.trim();
-  if(!ticket) return;
-  triageBtn.disabled=true;
-  loader.className='loader on';
-  result.style.display='none';
-  dlBtn.style.display='none';
-  try{
-    const r=await fetch('/triage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket})});
-    const d=await r.json();
-    if(!r.ok) throw new Error(d.detail||'Error');
-    renderResult(d);
-    _lastResult=d;
-    dlBtn.style.display='inline-block';
-  }catch(e){
-    result.innerHTML=`<div style="color:#f87171">Error: ${e.message}</div>`;
-    result.style.display='block';
-  }finally{
-    loader.className='loader';
-    triageBtn.disabled=false;
-  }
-}
-
-function toPageArray(raw){
-  if(!raw) return [];
-  if(Array.isArray(raw)) return raw;
-  if(typeof raw==='string') return raw.split(/[,\s]+/).map(Number).filter(n=>!isNaN(n)&&n>0);
-  if(typeof raw==='object') return Object.values(raw).map(Number).filter(n=>!isNaN(n)&&n>0);
+function toPageArray(raw) {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'string') return raw.split(/[,\s]+/).map(Number).filter(n => !isNaN(n) && n > 0);
+  if (typeof raw === 'object') return Object.values(raw).map(Number).filter(n => !isNaN(n) && n > 0);
   return [];
 }
-function renderResult(d){
-  const isEscalate=d.decision==='ESCALATE';
-  const pages=toPageArray(d.policy_pages).map(p=>`<div class="page-pill">p.${p}</div>`).join('');
-  const toolIcons={retrieve_policy:'🔍',check_sla_status:'⏱️',classify_sentiment:'😐',escalate_to_human:'🚨'};
-  const steps=(d.agent_steps||[]).map(s=>`
-    <div class="tool-step">
-      <strong>${toolIcons[s.tool]||'🔧'} ${escHtml(s.tool)}:</strong> "${escHtml(s.query)}"<br/>
-      <span style="color:#475569">${escHtml(s.result_preview)}…</span>
-    </div>`).join('');
 
-  result.innerHTML=`
-    <div class="decision-banner ${isEscalate?'escalate':'auto-resolve'}">
-      ${isEscalate?'🚨 ESCALATE TO AGENT':'✅ AUTO-RESOLVE'}
-    </div>
-    ${steps?`<div class="result-card"><h3>Agent Tool Calls</h3>${steps}</div>`:''}
-    <div class="result-card">
-      <h3>Reason (from policy)</h3>
-      <p>${escHtml(d.reason||'')}</p>
-      ${pages?`<div class="page-pills">${pages}</div>`:''}
-    </div>
-    <div class="result-card">
-      <h3>Draft Reply to Customer</h3>
-      <p>${escHtml(d.draft_reply||'')}</p>
-    </div>`;
-  result.style.display='block';
+function copyText(text, btnEl) {
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btnEl.textContent;
+    btnEl.textContent = '✓ Copied!';
+    setTimeout(() => { btnEl.textContent = orig; }, 1500);
+  }).catch(() => {});
 }
 
-function escHtml(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
-function fillChat5(el){document.getElementById('chatInput').value=el.textContent.trim();document.getElementById('chatInput').focus();}
+function renderResult(d) {
+  const isEscalate = d.decision === 'ESCALATE';
+  const pages = toPageArray(d.policy_pages).map(p => `<span class="page-pill">p.${p}</span>`).join('');
+  const toolIcons = {
+    retrieve_policy: '🔍',
+    check_sla_status: '⏱️',
+    classify_sentiment: '😐',
+    escalate_to_human: '🚨'
+  };
+  const steps = (d.agent_steps || []).map((s, idx) => `
+    <div class="tool-step">
+      <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+        <strong>${idx + 1}. ${toolIcons[s.tool] || '🔧'} ${escHtml(s.tool)}</strong>
+        <span style="font-size:0.72rem;color:#64748b">query: "${escHtml(s.query)}"</span>
+      </div>
+      <div style="color:#cbd5e1;font-size:0.8rem;white-space:pre-wrap">${escHtml(s.result_preview)}</div>
+    </div>`).join('');
 
-async function sendChat5(){
-  const input=document.getElementById('chatInput');
-  const q=input.value.trim();
-  if(!q)return;
-  const log=document.getElementById('chatLog');
-  const sendBtn=document.getElementById('chatSendBtn');
-  log.innerHTML+=`<div class="chat-msg user">${escHtml(q)}</div>`;
-  log.scrollTop=log.scrollHeight;
-  input.value='';
-  sendBtn.disabled=true;
-  const thinkingId='thinking-'+Date.now();
-  log.innerHTML+=`<div class="chat-msg bot" id="${thinkingId}">⏳ Thinking…</div>`;
-  log.scrollTop=log.scrollHeight;
-  try{
-    const r=await fetch('/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q})});
-    const d=await r.json();
-    const el=document.getElementById(thinkingId);
-    if(!r.ok)throw new Error(d.detail||'Error');
-    el.innerHTML=escHtml(d.answer)+(d.pages&&d.pages.length?`<div class="chat-pages">📄 Pages: ${d.pages.join(', ')}</div>`:'');
-  }catch(e){
-    document.getElementById(thinkingId).innerHTML='✗ '+escHtml(e.message);
-  }finally{
-    sendBtn.disabled=false;
-    log.scrollTop=log.scrollHeight;
+  result.innerHTML = `
+    <div class="decision-banner ${isEscalate ? 'escalate' : 'auto-resolve'}">
+      ${isEscalate ? '🚨 ESCALATE TO HUMAN' : '✅ AUTO-RESOLVE'}
+    </div>
+    ${steps ? `<div class="result-card"><h3>Agent Reasoning Steps</h3>${steps}</div>` : ''}
+    <div class="result-card">
+      <div class="result-card-head">
+        <h3>Reason (from Policy & Rules)</h3>
+        <button class="copy-btn" onclick="copyText(${JSON.stringify(d.reason || '')}, this)">Copy</button>
+      </div>
+      <p>${escHtml(d.reason || '')}</p>
+      ${pages ? `<div class="page-pills">${pages}</div>` : ''}
+    </div>
+    <div class="result-card">
+      <div class="result-card-head">
+        <h3>Draft Customer Response</h3>
+        <button class="copy-btn" onclick="copyText(${JSON.stringify(d.draft_reply || '')}, this)">Copy</button>
+      </div>
+      <p>${escHtml(d.draft_reply || '')}</p>
+    </div>`;
+  result.style.display = 'block';
+}
+
+async function runTriage() {
+  const ticket = document.getElementById('ticketInput').value.trim();
+  if (!ticket) return;
+  triageBtn.disabled = true;
+  loader.className = 'loader on';
+  result.style.display = 'none';
+  dlBtn.style.display = 'none';
+  try {
+    const r = await fetch('/triage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticket })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || 'Error running triage');
+    renderResult(d);
+    _lastResult = d;
+    dlBtn.style.display = 'inline-block';
+  } catch (e) {
+    result.innerHTML = `<div class="result-card" style="border-color:var(--danger)"><p style="color:var(--danger)">Error: ${escHtml(e.message)}</p></div>`;
+    result.style.display = 'block';
+  } finally {
+    loader.className = 'loader';
+    triageBtn.disabled = false;
   }
 }
 
-const _TICKETS=[
+function downloadResult() {
+  if (!_lastResult) return;
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const W = 170, ml = 20;
+  let y = 20;
+  const nl = (n = 6) => { y += n; };
+  const addLine = (text, size = 11, style = 'normal', color = [30, 30, 30]) => {
+    doc.setFontSize(size);
+    doc.setFont('helvetica', style);
+    doc.setTextColor(...color);
+    const lines = doc.splitTextToSize(String(text), W);
+    if (y + lines.length * size * 0.4 > 280) {
+      doc.addPage();
+      y = 20;
+    }
+    doc.text(lines, ml, y);
+    y += lines.length * (size * 0.45);
+  };
+  const isEsc = _lastResult.decision === 'ESCALATE';
+  addLine('Policy Triage Report', 16, 'bold', [190, 24, 93]);
+  nl(2);
+  addLine('Generated: ' + new Date().toLocaleString(), 9, 'normal', [120, 120, 120]);
+  nl(4);
+  doc.setDrawColor(200, 200, 200);
+  doc.line(ml, y, ml + W, y);
+  nl(6);
+  addLine('DECISION: ' + _lastResult.decision, 14, 'bold', isEsc ? [153, 27, 27] : [6, 95, 70]);
+  nl(6);
+  addLine('TICKET', 10, 'bold', [60, 60, 60]);
+  nl(2);
+  addLine(document.getElementById('ticketInput').value, 10);
+  nl(6);
+  addLine('REASON (from policy)', 10, 'bold', [60, 60, 60]);
+  nl(2);
+  addLine(_lastResult.reason || '', 10);
+  const _pp = toPageArray(_lastResult.policy_pages);
+  if (_pp.length) {
+    nl(3);
+    addLine('Pages cited: ' + _pp.join(', '), 9, 'normal', [120, 120, 120]);
+  }
+  nl(6);
+  addLine('DRAFT REPLY TO CUSTOMER', 10, 'bold', [60, 60, 60]);
+  nl(2);
+  addLine(_lastResult.draft_reply || '', 10);
+  nl(6);
+  if ((_lastResult.agent_steps || []).length) {
+    addLine('AGENT TOOL CALLS', 10, 'bold', [60, 60, 60]);
+    nl(2);
+    (_lastResult.agent_steps || []).forEach((s, i) => {
+      addLine((i + 1) + '. [' + s.tool + '] "' + s.query + '"', 9);
+      nl(1);
+      addLine('   ' + s.result_preview.slice(0, 120) + '...', 8, 'normal', [120, 120, 120]);
+      nl(3);
+    });
+  }
+  const ts = new Date().toISOString().replace(/[:.]/g, '-');
+  doc.save('triage_result_' + ts + '.pdf');
+}
+
+function escHtml(s) {
+  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function fillChat5(el) {
+  document.getElementById('chatInput').value = el.textContent.trim();
+  document.getElementById('chatInput').focus();
+}
+
+async function sendChat5() {
+  const input = document.getElementById('chatInput');
+  const q = input.value.trim();
+  if (!q) return;
+  const log = document.getElementById('chatLog');
+  const sendBtn = document.getElementById('chatSendBtn');
+  log.innerHTML += `<div class="chat-msg user">${escHtml(q)}</div>`;
+  log.scrollTop = log.scrollHeight;
+  input.value = '';
+  sendBtn.disabled = true;
+  const thinkingId = 'thinking-' + Date.now();
+  log.innerHTML += `<div class="chat-msg bot" id="${thinkingId}">⏳ Consulting policy excerpts…</div>`;
+  log.scrollTop = log.scrollHeight;
+  try {
+    const r = await fetch('/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: q })
+    });
+    const d = await r.json();
+    const el = document.getElementById(thinkingId);
+    if (!r.ok) throw new Error(d.detail || 'Error processing question');
+    el.innerHTML = escHtml(d.answer) + (d.pages && d.pages.length ? `<div class="chat-pages">📄 Cited Pages: ${d.pages.join(', ')}</div>` : '');
+  } catch (e) {
+    document.getElementById(thinkingId).innerHTML = '<span style="color:var(--danger)">✗ ' + escHtml(e.message) + '</span>';
+  } finally {
+    sendBtn.disabled = false;
+    log.scrollTop = log.scrollHeight;
+  }
+}
+
+const _TICKETS = [
   "I'd like to cancel my subscription and receive a refund. I signed up 3 days ago and haven't used the service at all.",
   "I am consulting with my lawyer about filing a lawsuit against your company. You have failed to resolve this issue for 3 months and I will pursue legal action immediately.",
   "Someone hacked into my account last night and made $800 in unauthorized purchases. My personal data and payment details may have been compromised.",
@@ -319,10 +855,64 @@ const _TICKETS=[
   "I purchased a product 60 days ago and I'm not happy with it. I would like a full refund. I know it might be past the return window but I feel I deserve one.",
   "I think I was scammed. I paid for the premium plan two weeks ago but my account still shows free tier. No one replies to my emails. This feels like fraud — I want my money back immediately.",
 ];
-function loadTicket(i){
-  document.getElementById('ticketInput').value=_TICKETS[i];
-  document.getElementById('ticketInput').scrollIntoView({behavior:'smooth',block:'center'});
+
+function loadTicket(i) {
+  const el = document.getElementById('ticketInput');
+  el.value = _TICKETS[i];
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  el.style.borderColor = 'var(--accent)';
+  setTimeout(() => { el.style.borderColor = 'var(--card-border)'; }, 1000);
 }
+
+async function initSession() {
+  try {
+    const kr = await fetch('/api/key-status');
+    if (kr.ok) {
+      const kd = await kr.json();
+      if (kd.configured && kd.provider) {
+        const provName = kd.provider.charAt(0).toUpperCase() + kd.provider.slice(1);
+        document.getElementById('providerPillText').textContent = `AI: ${provName}`;
+      }
+    }
+  } catch (e) {}
+
+  try {
+    const r = await fetch('/session');
+    if (!r.ok) return;
+    const d = await r.json();
+    if (d.filename && d.chunks > 0) {
+      _docName = d.filename;
+      dropZone.style.display = 'none';
+      fileLoaded.style.display = 'flex';
+      loadedFilename.textContent = d.filename;
+      loadedDetails.textContent = `${d.chunks} policy chunks indexed`;
+      triageSection.classList.add('active');
+      chatSection.classList.add('active');
+      if (d.last_result) {
+        _lastResult = d.last_result;
+        renderResult(d.last_result);
+        dlBtn.style.display = 'inline-block';
+      }
+      if (d.chat_history && d.chat_history.length) {
+        const log = document.getElementById('chatLog');
+        d.chat_history.forEach(item => {
+          log.innerHTML += `<div class="chat-msg user">${escHtml(item.question)}</div>`;
+          log.innerHTML += `<div class="chat-msg bot">${escHtml(item.answer)}</div>`;
+        });
+        log.scrollTop = log.scrollHeight;
+      }
+    }
+  } catch (e) {}
+}
+
+function showKeyModalPrompt() {
+  if (confirm("Would you like to reconfigure your AI API keys?")) {
+    sessionStorage.removeItem("qa_llm_key_session");
+    location.reload();
+  }
+}
+
+document.addEventListener('DOMContentLoaded', initSession);
 </script>
 
 <!-- ══ QA Run History (localStorage, per-browser) ══ -->
@@ -382,7 +972,7 @@ function loadTicket(i){
     if(host)return;
     host=document.createElement('div');
     host.innerHTML=
-      '<div id="qaHistCard" style="background:#1e293b;border:1px solid #334155;border-radius:12px;padding:24px;width:100%;max-width:800px;margin:0 auto 20px;font-family:inherit">'+
+      '<div id="qaHistCard" style="background:#1e293b;border:1px solid #334155;border-radius:12px;padding:24px;width:100%;max-width:860px;margin:0 auto 20px;font-family:inherit">'+
       '<div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer" id="qaHistHead">'+
       '<h2 style="font-size:1rem;font-weight:600;color:#cbd5e1;display:flex;align-items:center;gap:8px;margin:0">'+
       '<span style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:'+ACCENT+'22;border:1px solid '+ACCENT+'55;font-size:.75rem">🕘</span>'+
