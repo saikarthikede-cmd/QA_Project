@@ -169,6 +169,11 @@ async function uploadFile(file){
     analystSection.classList.add('active');
     dlBtn.style.display='none';
     result.innerHTML='';
+    // BUG-06 FIX: Clear stale result so the download button can't serve the
+    // previous PDF's analysis after a new document is uploaded.
+    _lastResult=null;
+    // BUG-11 FIX: Reset turn counter so IDs restart from turn-0 for each new PDF.
+    _turnCount=0;
   }catch(e){
     uploadStatus.className='status err';
     uploadStatus.textContent='✗ '+e.message;
@@ -194,7 +199,10 @@ function downloadResult(){
   nl(4);
   doc.setDrawColor(200,200,200);doc.line(ml,y,ml+W,y);nl(6);
   addLine('QUESTION',10,'bold',[60,60,60]);nl(2);
-  addLine(document.getElementById('questionInput').value,11);nl(6);
+  // BUG-07 FIX: Read the question from _lastResult.question (stored at analysis
+  // time) instead of the live input field. The input is cleared on submission,
+  // so reading it at download time always produced an empty "QUESTION" section.
+  addLine(_lastResult.question||'(question not recorded)',11);nl(6);
   addLine('ANSWER',10,'bold',[60,60,60]);nl(2);
   addLine(_lastResult.answer,11);nl(6);
   if((_lastResult.agent_steps||[]).length){
@@ -231,7 +239,9 @@ async function analyze(){
     const d=await r.json();
     if(!r.ok) throw new Error(d.detail||'Error');
     appendTurn(q,d);
-    _lastResult=d;
+    // BUG-07 FIX: Store the question alongside the result so downloadResult()
+    // can read it even after the input field has been cleared.
+    _lastResult={...d, question:q};
     dlBtn.style.display='inline-block';
   }catch(e){
     result.innerHTML+=`<div class="turn"><div class="turn-q">Q: ${escHtml(q)}</div><div style="color:#f87171">Error: ${escHtml(e.message)}</div></div>`;
@@ -242,10 +252,19 @@ async function analyze(){
 }
 
 async function clearChat(){
-  await fetch('/reset-chat',{method:'POST'});
+  // BUG-08 FIX: Wrap the server call in try/catch. Previously, if /reset-chat
+  // failed (network error, server restart), the UI cleared but the backend
+  // history was untouched — the agent kept its memory silently.
+  try{
+    const r=await fetch('/reset-chat',{method:'POST'});
+    if(!r.ok) throw new Error('Server returned '+r.status);
+  }catch(e){
+    console.warn('clearChat: server reset failed —',e.message,'(UI cleared anyway)');
+  }
   result.innerHTML='';
   _turnCount=0;
   dlBtn.style.display='none';
+  _lastResult=null;
 }
 
 function appendTurn(question,d){
@@ -287,7 +306,9 @@ function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').
 <!-- ══ QA Run History (localStorage, per-browser) ══ -->
 <script>
 (function(){
-  var KEY='qa_hist_app6', MAX=20, TRACK=["/analyze"], ACCENT='#a855f7';
+  // BUG-14 FIX: Also track /upload so QA testers can correlate which PDF
+  // was uploaded alongside the analysis questions in the run history panel.
+  var KEY='qa_hist_app6', MAX=20, TRACK=["/analyze","/upload"], ACCENT='#a855f7';
   function load(){try{var v=JSON.parse(localStorage.getItem(KEY));return Array.isArray(v)?v:[]}catch(e){return[]}}
   function save(l){try{localStorage.setItem(KEY,JSON.stringify(l.slice(0,MAX)))}catch(e){}}
   function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
