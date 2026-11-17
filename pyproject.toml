@@ -8,20 +8,20 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi==0.115.5",
-    "fpdf2==2.8.3",
-    "httpx==0.28.1",
-    "langchain-anthropic>=0.3.18",
-    "langchain-core==0.3.72",
-    "langchain-openai==0.3.28",
-    "numpy==1.26.4",
-    "openai>=1.50.0",
-    "pydantic==2.10.3",
-    "pypdf==4.3.1",
-    "pytest==8.3.4",
-    "python-multipart==0.0.12",
-    "sentence-transformers==2.7.0",
-    "uvicorn[standard]==0.32.1",
+    "fastapi>=0.163.1",
+    "fpdf2>=2.9.0",
+    "httpx>=0.28.1",
+    "langchain-anthropic>=1.7.10",
+    "langchain-core>=1.8.1",
+    "langchain-openai>=1.8.0",
+    "numpy>=2.5.5",
+    "openai>=3.52.0",
+    "pydantic>=2.14.3",
+    "pypdf>=7.1.0",
+    "pytest>=9.2.0",
+    "python-multipart>=0.0.34",
+    "sentence-transformers>=6.3.0",
+    "uvicorn[standard]>=0.54.0",
 ]
 
 [project.scripts]

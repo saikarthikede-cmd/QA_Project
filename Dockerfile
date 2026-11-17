@@ -1,6 +1,6 @@
 # Generic image for the 6 RAG apps (app1_resume_screener .. app6_data_analyst).
 # Built once per app via docker-compose build args (APP_DIR, PORT).
-FROM python:3.11-slim
+FROM python:3.12-slim
 WORKDIR /app
 
 # CPU-only torch: sentence-transformers pulls the full CUDA wheel by default
