@@ -13,9 +13,11 @@ tool responses, so context gets trimmed by whole turns, never mid-turn.
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional
 
+import openai
 from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage
 from openai import BadRequestError
 
@@ -83,10 +85,31 @@ def run_tool_calling_agent(
         recent_turns = turns if max_context_turns is None else turns[-max_context_turns:]
         context = opening + _flatten(recent_turns)
 
-        try:
-            response = bound.invoke(context)
-        except BadRequestError:
-            # Model generated a pathological tool call — stop, answer from what we have.
+        response = None
+        for attempt in range(3):
+            try:
+                response = bound.invoke(context)
+                break
+            except BadRequestError:
+                # Model generated a pathological tool call — stop, answer from what we have.
+                response = None
+                break
+            except Exception as e:
+                status = getattr(e, "status_code", None)
+                msg = str(e).lower()
+                is_transient = (
+                    isinstance(e, (openai.InternalServerError, openai.RateLimitError, openai.APIConnectionError, openai.APITimeoutError))
+                    or status in (429, 500, 502, 503, 504)
+                    or "high demand" in msg
+                    or "spikes in demand" in msg
+                    or "unavailable" in msg
+                )
+                if is_transient and attempt < 2:
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                raise
+
+        if response is None:
             break
 
         tool_calls = (response.tool_calls or [])[:max_tool_calls_per_turn]
