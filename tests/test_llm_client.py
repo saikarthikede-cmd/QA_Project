@@ -36,6 +36,40 @@ def test_resolve_model_maps_to_openai_default():
     assert resolve_model("openai", "llama-3.1-8b-instant") == "gpt-4o-mini"
 
 
+def test_resolve_model_maps_to_gemini_default():
+    assert resolve_model("gemini", "llama-3.1-8b-instant") == "gemini-3.5-flash"
+
+
+def test_validate_key_gemini_uses_google_endpoint(monkeypatch):
+    from shared import llm_client
+
+    class FakeModels:
+        def list(self):
+            return []
+
+    class FakeRoot:
+        models = FakeModels()
+
+    seen = {}
+
+    class FakeChat:
+        def __init__(self, **kw):
+            seen.update(kw)
+            self.root_client = FakeRoot()
+
+    monkeypatch.setattr(llm_client, "ChatOpenAI", FakeChat)
+    client, provider = llm_client.validate_key("Gemini", "  AIza-test  ")
+    assert provider == "gemini"
+    assert seen["base_url"] == "https://generativelanguage.googleapis.com/v1beta/openai/"
+    assert seen["model"] == "gemini-3.5-flash"
+    assert seen["api_key"] == "AIza-test"
+
+
+def test_validate_key_error_mentions_gemini():
+    with pytest.raises(ValueError, match="Gemini"):
+        validate_key("nope", "k")
+
+
 def test_require_client_blocks_when_unset():
     with pytest.raises(HTTPException) as exc_info:
         require_client(None)
