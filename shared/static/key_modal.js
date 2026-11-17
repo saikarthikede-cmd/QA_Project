@@ -97,6 +97,7 @@
       '<div class="provider-row">' +
       '<button type="button" class="provider-btn" data-provider="groq">Groq</button>' +
       '<button type="button" class="provider-btn" data-provider="openai">OpenAI</button>' +
+      '<button type="button" class="provider-btn" data-provider="gemini">Gemini</button>' +
       "</div>" +
       '<input type="password" id="llm-key-input" placeholder="API key" autocomplete="off" style="display:none" />' +
       '<div class="error" id="llm-key-error"></div>' +

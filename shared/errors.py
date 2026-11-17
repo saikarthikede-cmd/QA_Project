@@ -1,7 +1,7 @@
 """Shared LLM-call error handling for all six apps.
 
-Both providers (Groq, OpenAI) are called through the `openai` SDK — Groq's
-endpoint is OpenAI-compatible — so one set of exception types covers either.
+All providers (Groq, OpenAI, Gemini) are called through the `openai` SDK — Groq's and
+Gemini's endpoints are OpenAI-compatible — so one set of exception types covers either.
 """
 from __future__ import annotations
 

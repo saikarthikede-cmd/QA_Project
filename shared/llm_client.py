@@ -1,12 +1,14 @@
-"""Lets each app's user supply their own Groq or OpenAI key at runtime via a
-popup, instead of a key baked into .env. Both providers are called through
-LangChain's ChatOpenAI — Groq exposes an OpenAI-compatible endpoint, so one
-client shape covers chat completions, tool calling, and JSON mode for either.
+"""Lets each app's user supply their own Groq, OpenAI or Gemini key at runtime
+via a popup, instead of a key baked into .env. All providers are called through
+LangChain's ChatOpenAI — Groq and Gemini both expose OpenAI-compatible
+endpoints, so one client shape covers chat completions, tool calling, and JSON
+mode for any of them.
 Every call site overrides the model per-call via `.bind(model=...)` since
 different apps/tiers need different models from the same client.
 """
 from __future__ import annotations
 
+import os
 from typing import Optional, Tuple
 
 import openai
@@ -16,7 +18,16 @@ from pydantic import BaseModel
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 GROQ_DEFAULT_MODEL = "llama-3.3-70b-versatile"
 OPENAI_DEFAULT_MODEL = "gpt-4o-mini"
-DISPLAY_NAME = {"groq": "Groq", "openai": "OpenAI"}
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+# gemini-2.5-flash was shut down by Google on 2026-10-16; override with the GEMINI_MODEL
+# env var if Google retires this one too (https://ai.google.dev/gemini-api/docs/deprecations).
+GEMINI_DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
+DISPLAY_NAME = {"groq": "Groq", "openai": "OpenAI", "gemini": "Gemini"}
+PROVIDERS = {
+    "groq": (GROQ_DEFAULT_MODEL, GROQ_BASE_URL),
+    "openai": (OPENAI_DEFAULT_MODEL, None),
+    "gemini": (GEMINI_DEFAULT_MODEL, GEMINI_BASE_URL),
+}
 
 
 class SetKeyRequest(BaseModel):
@@ -32,17 +43,19 @@ def validate_key(provider: str, api_key: str) -> Tuple[ChatOpenAI, str]:
     rejected key, or unreachable API.
     """
     provider = (provider or "").strip().lower()
-    if provider not in ("groq", "openai"):
-        raise ValueError(f"Unsupported provider: {provider!r}. Choose Groq or OpenAI.")
+    if provider not in PROVIDERS:
+        raise ValueError(f"Unsupported provider: {provider!r}. Choose Groq, OpenAI or Gemini.")
     api_key = (api_key or "").strip()
     if not api_key:
         raise ValueError("API key is required.")
 
+    default_model, base_url = PROVIDERS[provider]
     client = ChatOpenAI(
-        model=GROQ_DEFAULT_MODEL if provider == "groq" else OPENAI_DEFAULT_MODEL,
+        model=default_model,
         api_key=api_key,
-        base_url=GROQ_BASE_URL if provider == "groq" else None,
-        timeout=30.0,
+        base_url=base_url,
+        timeout=45.0,
+        max_retries=1,  # SDK default is 2; each retry multiplies worst-case wait on a slow/rate-limited provider
         temperature=0,
     )
     name = DISPLAY_NAME[provider]
@@ -61,8 +74,12 @@ def validate_key(provider: str, api_key: str) -> Tuple[ChatOpenAI, str]:
 def resolve_model(provider: Optional[str], groq_model: str) -> str:
     """Map a Groq model name to whatever this session's active provider needs.
 
-    ponytail: one fixed OpenAI model regardless of which Groq tier was
-    requested — good enough for a QA demo; add per-tier mapping if answer
-    quality on OpenAI needs to differ between the "fast" and "smart" tiers.
+    ponytail: one fixed model per non-Groq provider regardless of which Groq
+    tier was requested — good enough for a QA demo; add per-tier mapping if
+    answer quality needs to differ between the "fast" and "smart" tiers.
     """
-    return OPENAI_DEFAULT_MODEL if provider == "openai" else groq_model
+    if provider == "openai":
+        return OPENAI_DEFAULT_MODEL
+    if provider == "gemini":
+        return GEMINI_DEFAULT_MODEL
+    return groq_model
