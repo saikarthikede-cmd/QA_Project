@@ -35,7 +35,7 @@ def set_key(body: SetKeyRequest):
     try:
         client, provider = validate_key(body.provider, body.api_key)
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
     return {"status": "ok"}
 
 
@@ -166,9 +166,9 @@ async def upload(file: UploadFile = File(...)):
     try:
         pages = extract_pages(pdf_bytes)
     except ValueError as e:
-        raise HTTPException(422, str(e))
+        raise HTTPException(422, str(e)) from e
     except Exception as e:
-        raise HTTPException(400, f"Could not read PDF: {e}")
+        raise HTTPException(400, f"Could not read PDF: {e}") from e
     chunks = chunk_pages(pages, source=file.filename)
     chunks = embed_chunks(chunks)
     _state["chunks"] = chunks
@@ -276,7 +276,6 @@ def _run_agent():
             steps.append({"tool": "write_section", "section": section.get("label", "")})
 
     # Guarantee all 5 canonical sections exist and are ordered predictably
-    canonical_titles = {s[0]: s[1] for s in REPORT_SECTIONS}
     ordered_report = {}
     for key, title, _ in REPORT_SECTIONS:
         if key in report_sections:

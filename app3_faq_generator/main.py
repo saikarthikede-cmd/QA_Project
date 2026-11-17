@@ -57,7 +57,7 @@ def set_key(body: SetKeyRequest):
     try:
         client, provider = validate_key(body.provider, body.api_key)
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
     return {"status": "ok"}
 
 
@@ -351,7 +351,7 @@ def _build_faqs(avoid_questions: Optional[List[str]] = None, count: int = 12) ->
             tools=SEARCH_TOOL, run_tool=run_tool,
             max_iterations=4, max_tool_calls_per_turn=2, max_total_tool_calls=4,
         )
-    except Exception as e:
+    except Exception:
         fallback_models = []
         if provider == "gemini":
             fallback_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
@@ -408,7 +408,7 @@ async def upload(file: UploadFile = File(...)):
     try:
         pages = extract_pages(pdf_bytes)
     except ValueError as e:
-        raise HTTPException(422, str(e))
+        raise HTTPException(422, str(e)) from e
     chunks = chunk_pages(pages, source=file.filename)
     chunks = embed_chunks(chunks)
     _state["chunks"] = chunks

@@ -6,7 +6,7 @@ import pickle
 import re
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -48,7 +48,7 @@ def set_key(body: SetKeyRequest):
     try:
         client, provider = validate_key(body.provider, body.api_key)
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
     return {"status": "ok"}
 
 
@@ -323,7 +323,7 @@ async def upload(file: UploadFile = File(...)):
     try:
         pages = extract_pages(pdf_bytes)
     except ValueError as e:
-        raise HTTPException(422, str(e))
+        raise HTTPException(422, str(e)) from e
     chunks = chunk_pages(pages, source=file.filename)
     chunks = embed_chunks(chunks)
     _state["chunks"] = chunks

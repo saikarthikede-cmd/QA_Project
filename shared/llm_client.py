@@ -247,11 +247,11 @@ def _validate_single_key(provider: str, key: str, client: Any) -> None:
             conn_err = True
 
         if auth_err:
-            raise ValueError(f"{name} rejected this key — check it and try again.")
+            raise ValueError(f"{name} rejected this key — check it and try again.") from e
         if conn_err:
-            raise ValueError(f"Could not reach {name}. Check your network and try again.")
+            raise ValueError(f"Could not reach {name}. Check your network and try again.") from e
         msg = getattr(e, "message", str(e))
-        raise ValueError(f"{name} returned an error validating this key: {msg}")
+        raise ValueError(f"{name} returned an error validating this key: {msg}") from e
 
 
 def validate_key(

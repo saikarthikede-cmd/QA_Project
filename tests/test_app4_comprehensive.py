@@ -1,12 +1,10 @@
 """Comprehensive regression and edge-case tests for App 4 – Report Summarizer Agent."""
 from __future__ import annotations
 
-import io
 from pathlib import Path
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 import pytest
-from pypdf import PdfWriter
 
 from app4_report_agent import main as app4_main
 

@@ -160,7 +160,6 @@ def test_non_list_fields_normalised(loaded, monkeypatch):
 
 
 def test_results_sorted_high_to_low(loaded, monkeypatch):
-    import json
     scores = iter([40, 85])
 
     class Seq(FakeLLMClient):
