@@ -1,12 +1,13 @@
 param(
-    [switch]$NoStop
+    [switch]$NoStop,
+    [switch]$NoWait
 )
 
 $ErrorActionPreference = "Stop"
 $Root = $PSScriptRoot
 
 $services = @(
-    @{ Name = "Portal Dashboard"; Dir = "portal"; Port = 8000 },
+    @{ Name = "Portal Dashboard"; Dir = "src/portal"; Port = 8000 },
     @{ Name = "App 1 - Resume Screener"; Dir = "app1_resume_screener"; Port = 8001 },
     @{ Name = "App 2 - Document Diff"; Dir = "app2_doc_diff"; Port = 8002 },
     @{ Name = "App 3 - FAQ Generator"; Dir = "app3_faq_generator"; Port = 8003 },
@@ -38,25 +39,61 @@ if (-not $NoStop) {
     Start-Sleep -Seconds 2
 }
 
+# Resolve runner: prefer uv, fallback to .venv uvicorn, then py -3.11
+$hasUv = [bool](Get-Command "uv" -ErrorAction SilentlyContinue)
+$venvPy = Join-Path $Root ".venv\Scripts\python.exe"
+
 foreach ($svc in $services) {
     $workDir = Join-Path $Root $svc.Dir
     $outLog = Join-Path $Root ("logs\live{0}.out.log" -f $svc.Port)
     $errLog = Join-Path $Root ("logs\live{0}.err.log" -f $svc.Port)
 
-    Start-Process `
-        -FilePath "py" `
-        -ArgumentList @("-3.11", "-m", "uvicorn", "main:app", "--port", "$($svc.Port)") `
-        -WorkingDirectory $workDir `
-        -RedirectStandardOutput $outLog `
-        -RedirectStandardError $errLog `
-        -WindowStyle Hidden
+    if ($hasUv) {
+        Start-Process `
+            -FilePath "uv" `
+            -ArgumentList @("run", "uvicorn", "main:app", "--port", "$($svc.Port)") `
+            -WorkingDirectory $workDir `
+            -RedirectStandardOutput $outLog `
+            -RedirectStandardError $errLog `
+            -WindowStyle Hidden
+    } elseif (Test-Path $venvPy) {
+        Start-Process `
+            -FilePath $venvPy `
+            -ArgumentList @("-m", "uvicorn", "main:app", "--port", "$($svc.Port)") `
+            -WorkingDirectory $workDir `
+            -RedirectStandardOutput $outLog `
+            -RedirectStandardError $errLog `
+            -WindowStyle Hidden
+    } else {
+        Start-Process `
+            -FilePath "py" `
+            -ArgumentList @("-3.11", "-m", "uvicorn", "main:app", "--port", "$($svc.Port)") `
+            -WorkingDirectory $workDir `
+            -RedirectStandardOutput $outLog `
+            -RedirectStandardError $errLog `
+            -WindowStyle Hidden
+    }
 
     Write-Host ("Starting {0} on http://localhost:{1}" -f $svc.Name, $svc.Port) -ForegroundColor Cyan
 }
 
 Write-Host ""
 Write-Host "Waiting for services..." -ForegroundColor Yellow
-Start-Sleep -Seconds 8
+
+# Poll each service until ready or timeout
+$maxAttempts = 8
+for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+    Start-Sleep -Seconds 3
+    $pending = 0
+    foreach ($svc in $services) {
+        try {
+            $null = Invoke-WebRequest -Uri ("http://127.0.0.1:{0}/" -f $svc.Port) -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+        } catch {
+            $pending++
+        }
+    }
+    if ($pending -eq 0) { break }
+}
 
 foreach ($svc in $services) {
     try {
@@ -70,4 +107,21 @@ foreach ($svc in $services) {
 
 Write-Host ""
 Write-Host "Dashboard: http://localhost:8000" -ForegroundColor Green
-Write-Host "Keep this terminal open only if you want to watch this message. The servers are running in the background."
+Write-Host "All services are up and running!" -ForegroundColor Green
+
+if (-not $NoWait) {
+    Write-Host "Keep this window open to maintain background servers (Press Ctrl+C to stop all servers)." -ForegroundColor Gray
+    try {
+        while ($true) {
+            Start-Sleep -Seconds 2
+        }
+    } finally {
+        Write-Host "`nStopping servers..." -ForegroundColor Yellow
+        $ports = $services | ForEach-Object { $_.Port }
+        $listeners = Get-NetTCPConnection -LocalPort $ports -State Listen -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty OwningProcess -Unique
+        foreach ($p in $listeners) {
+            if ($p -and $p -ne 0) { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue }
+        }
+    }
+}

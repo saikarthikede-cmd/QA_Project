@@ -1,5 +1,5 @@
-# Run any of the 6 QA demo apps with Python 3.11
-# Usage: .\run.ps1 1   (runs app 1 on port 8001)
+# Run any of the 6 QA demo apps using uv
+# Usage: .\run.ps1 3   (runs app 3 on port 8003)
 
 param([int]$App = 1)
 
@@ -20,4 +20,11 @@ if (-not $apps.ContainsKey($App)) {
 $cfg = $apps[$App]
 Write-Host "Starting App $App — $($cfg.name) on http://localhost:$($cfg.port)" -ForegroundColor Cyan
 Set-Location (Join-Path $PSScriptRoot $cfg.dir)
-py -3.11 -m uvicorn main:app --reload --port $cfg.port
+
+if (Get-Command "uv" -ErrorAction SilentlyContinue) {
+    uv run uvicorn main:app --reload --port $cfg.port
+} elseif (Test-Path (Join-Path $PSScriptRoot ".venv\Scripts\python.exe")) {
+    & (Join-Path $PSScriptRoot ".venv\Scripts\python.exe") -m uvicorn main:app --reload --port $cfg.port
+} else {
+    py -3.11 -m uvicorn main:app --reload --port $cfg.port
+}

@@ -11,6 +11,7 @@ dependencies = [
     "fastapi==0.115.5",
     "fpdf2==2.8.3",
     "httpx==0.28.1",
+    "langchain-anthropic>=0.3.18",
     "langchain-core==0.3.72",
     "langchain-openai==0.3.28",
     "numpy==1.26.4",
@@ -25,6 +26,10 @@ dependencies = [
 
 [project.scripts]
 qa-project = "qa_project:main"
+app = "qa_project.run:main"
+all = "qa_project.run_all:main"
+run-app = "qa_project.run:main"
+run-all = "qa_project.run_all:main"
 
 [build-system]
 requires = ["uv_build>=0.12.0,<0.13.0"]
