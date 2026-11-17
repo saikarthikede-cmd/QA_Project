@@ -49,6 +49,8 @@
   .rec-strong{background:#d1fae5;color:#065f46}
   .rec-possible{background:#fef3c7;color:#92400e}
   .rec-not{background:#fee2e2;color:#991b1b}
+  .rec-fail{background:#334155;color:#cbd5e1}
+  .cite-pages{font-size:.72rem;color:#818cf8;margin-bottom:8px}
   .candidate-name{font-size:.95rem;font-weight:700;color:#e2e8f0;margin-bottom:6px}
   .candidate-summary{font-size:.82rem;color:#94a3b8;line-height:1.5;margin-bottom:10px}
   .skill-section{margin-top:8px}
@@ -159,8 +161,33 @@ let _jdName='';
 function setupDrop(zone,input,handler){
   ['dragenter','dragover'].forEach(e=>zone.addEventListener(e,ev=>{ev.preventDefault();zone.classList.add('drag')}));
   ['dragleave','drop'].forEach(e=>zone.addEventListener(e,ev=>{ev.preventDefault();zone.classList.remove('drag')}));
-  zone.addEventListener('drop',ev=>[...ev.dataTransfer.files].forEach(handler));
-  input.addEventListener('change',()=>[...input.files].forEach(handler));
+  // Upload one at a time (parallel uploads race on status text and server state),
+  // and clear the input so the same file can be picked again after removal.
+  const run=async files=>{for(const f of files)await handler(f);};
+  zone.addEventListener('drop',ev=>run([...ev.dataTransfer.files]));
+  input.addEventListener('change',()=>{const files=[...input.files];input.value='';run(files);});
+}
+
+async function restoreState(){
+  try{
+    const r=await fetch('/state');if(!r.ok)return;
+    const d=await r.json();
+    if(!d.jd_filename)return;
+    _jdName=d.jd_filename;
+    jdStatus.className='status ok';jdStatus.textContent=`✓ JD loaded: "${d.jd_filename}"`;
+    _resumes=d.resumes||[];
+    resumeCard.style.display='block';
+    refreshPills();
+    screenBtn.disabled=!_resumes.length;
+    if((d.last_results||[]).length){
+      _lastResults={results:d.last_results,jd:d.jd_filename};
+      renderResults(d.last_results);
+      resultsSection.classList.add('active');
+      dlBtn.style.display='inline-block';
+      chatSection.classList.add('active');
+      appendChatMsg('bot','Session restored. Ask a question about the candidates or the JD.',[]);
+    }
+  }catch(e){/* server unreachable - start with an empty page */}
 }
 
 setupDrop(document.getElementById('jdZone'),jdInput,uploadJD);
@@ -178,6 +205,8 @@ async function uploadJD(file){
     jdStatus.textContent=`✓ JD loaded: "${d.filename}"`;
     _jdName=d.filename;
     _resumes=[];resumePills.innerHTML='';screenBtn.disabled=true;
+    resetResults();
+    resumeStatus.textContent='';resumeStatus.className='status';
     resumeCard.style.display='block';
   }catch(e){jdStatus.className='status err';jdStatus.textContent='✗ '+e.message;}
 }
@@ -191,6 +220,7 @@ async function uploadResume(file){
     const d=await r.json();
     if(!r.ok)throw new Error(d.detail||'Upload failed');
     _resumes.push(file.name);
+    resetResults();
     refreshPills();
     resumeStatus.className='status ok';resumeStatus.textContent=`✓ ${file.name} added. Total: ${d.total_resumes}`;
     screenBtn.disabled=false;
@@ -199,19 +229,33 @@ async function uploadResume(file){
 
 async function removeResume(name){
   const r=await fetch('/resumes/'+encodeURIComponent(name),{method:'DELETE'});
-  if(r.ok){_resumes=_resumes.filter(n=>n!==name);refreshPills();if(!_resumes.length)screenBtn.disabled=true;}
+  if(r.ok){_resumes=_resumes.filter(n=>n!==name);resetResults();refreshPills();if(!_resumes.length)screenBtn.disabled=true;}
+}
+
+// Server clears results + chat whenever the JD or resume set changes - mirror that in the UI.
+function resetResults(){
+  _lastResults=null;
+  resultsContainer.innerHTML='';
+  resultsSection.classList.remove('active');
+  dlBtn.style.display='none';
+  chatSection.classList.remove('active');
+  chatLog.innerHTML='';
 }
 
 function refreshPills(){
-  resumePills.innerHTML=_resumes.map(n=>`
-    <div class="resume-pill">👤 ${n}
-      <button class="btn-sm" onclick="removeResume('${n}')">✕</button>
+  resumePills.innerHTML=_resumes.map((n,i)=>`
+    <div class="resume-pill">👤 ${esc(n)}
+      <button class="btn-sm" data-idx="${i}" aria-label="Remove ${esc(n)}">✕</button>
     </div>`).join('');
+  resumePills.querySelectorAll('button[data-idx]').forEach(b=>
+    b.addEventListener('click',()=>removeResume(_resumes[+b.dataset.idx])));
 }
 
 async function screen(){
   screenBtn.disabled=true;
   loader.className='loader on';
+  const t0=Date.now();
+  const tick=setInterval(()=>{loader.textContent=`⏳ AI is evaluating candidates… ${Math.round((Date.now()-t0)/1000)}s (usually under a minute per candidate; check the server terminal if this keeps growing)`;},1000);
   resultsSection.classList.remove('active');
   dlBtn.style.display='none';
   try{
@@ -228,11 +272,12 @@ async function screen(){
   }catch(e){
     resultsContainer.innerHTML=`<div style="color:#f87171">Error: ${e.message}</div>`;
     resultsSection.classList.add('active');
-  }finally{loader.className='loader';screenBtn.disabled=false;}
+  }finally{clearInterval(tick);loader.className='loader';screenBtn.disabled=false;}
 }
 
 function scoreColor(s){return s>=80?'#22c55e':s>=50?'#f59e0b':'#f87171';}
-function recClass(r){return r==='Strong Match'?'rec-strong':r==='Possible Match'?'rec-possible':'rec-not';}
+function recClass(r){return r==='Strong Match'?'rec-strong':r==='Possible Match'?'rec-possible':r==='Screening Failed'?'rec-fail':'rec-not';}
+function hasScore(c){return typeof c.score==='number';}
 function conicGrad(s){return `conic-gradient(${scoreColor(s)} ${s}%, #1e293b 0)`;}
 
 function renderResults(results){
@@ -240,13 +285,15 @@ function renderResults(results){
     const matched=(c.matched_skills||[]).map(s=>`<span class="pill pill-match">${esc(s)}</span>`).join('');
     const missing=(c.missing_skills||[]).map(s=>`<span class="pill pill-miss">${esc(s)}</span>`).join('');
     const flags=(c.red_flags||[]).map(s=>`<span class="pill pill-flag">⚑ ${esc(s)}</span>`).join('');
+    const ok=hasScore(c);
+    const pages=(c.cited_pages||[]).length?`<div class="cite-pages">📄 Evidence from pages: ${esc((c.cited_pages||[]).join(', '))}</div>`:'';
     return `
     <div class="candidate-card">
       <div>
-        <div class="score-ring" style="background:${conicGrad(c.score||0)}">
+        <div class="score-ring" style="background:${ok?conicGrad(c.score):'#334155'}">
           <div class="score-inner">
-            <div class="score-num" style="color:${scoreColor(c.score||0)}">${c.score||0}</div>
-            <div class="score-label">AI SCORE</div>
+            <div class="score-num" style="color:${ok?scoreColor(c.score):'#94a3b8'}">${ok?c.score:'—'}</div>
+            <div class="score-label">${ok?'AI SCORE':'FAILED'}</div>
           </div>
         </div>
         <div class="semantic-bar-wrap">
@@ -254,12 +301,13 @@ function renderResults(results){
           <div class="semantic-bar-track"><div class="semantic-bar-fill" style="width:${c.semantic_score||0}%;background:${scoreColor(c.semantic_score||0)}"></div></div>
           <div class="semantic-bar-val">${c.semantic_score||0}%</div>
         </div>
-        ${Math.abs((c.score||0)-(c.semantic_score||0))>=30?'<div class="score-mismatch">⚠ AI vs semantic disagree</div>':''}
+        ${ok&&Math.abs(c.score-(c.semantic_score||0))>=30?'<div class="score-mismatch">⚠ AI vs semantic disagree</div>':''}
       </div>
       <div>
         <div class="candidate-name"><span class="rank-badge">#${i+1}</span>${esc(c.candidate)}</div>
         <span class="rec-badge ${recClass(c.recommendation)}">${esc(c.recommendation||'Unknown')}</span>
         <div class="candidate-summary">${esc(c.summary||'')}</div>
+        ${pages}
         ${matched?`<div class="skill-section"><h4>Matched Skills</h4><div class="pills">${matched}</div></div>`:''}
         ${missing?`<div class="skill-section" style="margin-top:8px"><h4>Missing Skills</h4><div class="pills">${missing}</div></div>`:''}
         ${flags?`<div class="skill-section" style="margin-top:8px"><h4>Red Flags</h4><div class="pills">${flags}</div></div>`:''}
@@ -268,7 +316,7 @@ function renderResults(results){
   }).join('');
 }
 
-function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
 function fillChat(el){chatInput.value=el.textContent.trim();chatInput.focus();}
 
 const chatSection=document.getElementById('chatSection');
@@ -323,7 +371,8 @@ function downloadReport(){
   doc.setDrawColor(200,200,200);doc.line(ml,y,ml+W,y);nl(8);
   _lastResults.results.forEach((c,i)=>{
     addLine(`#${i+1} — ${c.candidate}`,12,'bold',[99,102,241]);nl(2);
-    addLine(`AI Score: ${c.score}/100  |  Semantic Match: ${c.semantic_score||0}%  |  ${c.recommendation}`,10,'bold',c.score>=80?[22,163,74]:c.score>=50?[217,119,6]:[220,38,38]);nl(3);
+    const scoreTxt=hasScore(c)?`${c.score}/100`:'N/A (screening failed)';
+    addLine(`AI Score: ${scoreTxt}  |  Semantic Match: ${c.semantic_score||0}%  |  ${c.recommendation}`,10,'bold',!hasScore(c)?[100,100,100]:c.score>=80?[22,163,74]:c.score>=50?[217,119,6]:[220,38,38]);nl(3);
     addLine(c.summary||'',10);nl(3);
     if((c.matched_skills||[]).length){addLine('Matched: '+c.matched_skills.join(', '),9,'normal',[22,163,74]);nl(2);}
     if((c.missing_skills||[]).length){addLine('Missing: '+c.missing_skills.join(', '),9,'normal',[220,38,38]);nl(2);}
@@ -332,6 +381,7 @@ function downloadReport(){
   });
   doc.save('resume_screening_'+new Date().toISOString().replace(/[:.]/g,'-')+'.pdf');
 }
+restoreState();
 </script>
 
 <!-- ══ QA Run History (localStorage, per-browser) ══ -->

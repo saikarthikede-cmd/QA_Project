@@ -7,8 +7,9 @@ WORKDIR /app
 # (~2GB) which is wasted on a CPU-only embedding model in 6 separate images.
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY pyproject.toml README.md ./
+COPY src/ ./src/
+RUN pip install --no-cache-dir .
 
 COPY shared/ ./shared/
 ARG APP_DIR

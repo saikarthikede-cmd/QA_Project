@@ -1,174 +1,153 @@
-# QA Projects
+# QA Project — AI Testing & Document Understanding Suite
 
-This repository is a collection of FastAPI-based AI demo applications for document understanding, retrieval, and structured generation. It is designed for evaluation, walkthroughs, and QA testing of LLM-assisted workflows rather than for production deployment.
+A modular collection of FastAPI-based AI applications designed for document intelligence, retrieval-augmented generation (RAG), and structured evaluation. Built specifically for QA engineers, evaluators, and product teams to test LLM robustness, grounding, and edge-case handling.
 
-## What this system does
+---
 
-Each app follows a similar pattern:
+## ⚡ Quick Start with `uv`
 
-1. The user uploads a document, text file, PDF, or data input.
-2. The app extracts content and prepares it for retrieval or analysis.
-3. A shared LLM layer uses the uploaded content to answer questions, generate structured outputs, compare documents, or classify requests.
-4. The app returns a result that is meant to be grounded in the provided content, with citations or structured reasoning where possible.
+This repository uses [`uv`](https://docs.astral.sh/uv/) for fast, deterministic dependency and environment management.
 
-This means the core behavior is not just “chat with an AI,” but “use AI with context and evidence.”
+### 1. Configure API Keys (Optional but Recommended)
 
-## Apps in this repository
+Copy `.env.example` to `.env`:
 
-### 1. Resume Screener
-- Upload a job description and one or more resumes.
-- The app ranks candidates by relevance and provides justification based on the uploaded content.
-- Good QA scenarios: invalid file types, duplicate resumes, missing job description, and score ordering.
-
-### 2. Document Diff Analyzer
-- Upload two PDF versions of the same document.
-- The app compares them and highlights added, removed, and modified content.
-- Good QA scenarios: unrelated documents, missing files, and page-level evidence quality.
-
-### 3. FAQ Generator
-- Upload a PDF manual or policy document.
-- The app builds a local retrieval index and generates grounded FAQ pairs.
-- Good QA scenarios: unrelated questions, duplicate questions, regeneration, and citation accuracy.
-
-### 4. Report Agent
-- Upload a report-style PDF.
-- The app generates a structured report with sections such as summary, recommendations, and risks.
-- Good QA scenarios: short versus long PDFs, scanned documents, and whether citations appear for each section.
-
-### 5. Policy Triage Agent
-- Upload a policy document and paste a customer support ticket.
-- The app decides whether the issue should be escalated or auto-resolved.
-- Good QA scenarios: ambiguous tickets, incomplete policy context, and incorrect classifications.
-
-### 6. Data Analyst Agent
-- Upload CSV or PDF-based data content.
-- The app can answer follow-up analytical questions and perform basic data reasoning.
-- Good QA scenarios: malformed input, missing columns, and whether answer quality stays consistent across turns.
-
-### Portal Dashboard
-- The portal provides a single landing page to check the status of all six apps.
-- It helps users launch or inspect the apps from one place.
-
-## How the system works internally
-
-The repository uses a shared architecture across apps:
-
-- FastAPI provides the web API layer.
-- Uvicorn runs each app as a local service.
-- The shared code under shared/ handles LLM access, PDF processing, and common errors.
-- Many apps use retrieval-based prompting so the AI is grounded in uploaded files rather than relying only on general knowledge.
-- LangChain-style components are used in the shared LLM and retrieval flow.
-
-## Prerequisites
-
-- Python 3.11
-- Windows PowerShell
-- A Groq or OpenAI API key for the model features
-- Internet access for live LLM calls
-
-Install dependencies from the repository root:
-
-```powershell
-py -3.11 -m pip install -r requirements.txt
+```bash
+cp .env.example .env
 ```
 
-> Python 3.14 is not currently recommended for this project because of dependency compatibility issues.
-
-## Quick start
-
-### Option 1: Run all apps together
-
-```powershell
-./run_all.ps1
+Add your API key(s) for any supported provider:
+```env
+GROQ_API_KEY=gsk_your_key_here
+# or OPENAI_API_KEY=sk-...
+# or GEMINI_API_KEY=AIza...
+# or ANTHROPIC_API_KEY=sk-ant-...
+# or CODEVECTOR_API_KEY=...
 ```
 
-This starts the portal and all six apps. The default URLs are:
+> **Automatic Modal Bypass:** When an API key is set in `.env`, the browser modal is automatically bypassed on load!
+>
+> **Round-Robin & Failover:** You can provide multiple comma-separated keys (`key1, key2, key3`). The system automatically distributes requests round-robin and fails over to the next key if one hits rate limits (429) or high demand spikes (503).
 
-- Portal: http://localhost:8000
-- App 1: http://localhost:8001
-- App 2: http://localhost:8002
-- App 3: http://localhost:8003
-- App 4: http://localhost:8004
-- App 5: http://localhost:8005
-- App 6: http://localhost:8006
+---
 
-### Option 2: Run a single app
+### 2. Run the Applications
 
-```powershell
-./run.ps1 1
-./run.ps1 2
-./run.ps1 3
-./run.ps1 4
-./run.ps1 5
-./run.ps1 6
+#### Option A: Run All Apps + Dashboard
+```bash
+uv run all
+```
+Or directly:
+```bash
+uv run python run_all.py
 ```
 
-Each script launches the selected app with Uvicorn on its assigned port.
+This concurrently launches the unified portal and all 6 apps:
+| Service | Port | Description |
+|---|---|---|
+| **Portal Dashboard** | `http://localhost:8000` | Unified landing page & status monitor |
+| **App 1: Resume Screener** | `http://localhost:8001` | Semantic candidate ranking against job descriptions |
+| **App 2: Doc Diff Analyzer** | `http://localhost:8002` | Redline comparison & page-level change evidence |
+| **App 3: FAQ Generator** | `http://localhost:8003` | RAG Q&A generator with citations & live chat |
+| **App 4: Report Agent** | `http://localhost:8004` | Structured 5-section executive report generator |
+| **App 5: Policy Triage** | `http://localhost:8005` | Support ticket triage agent with 4 tool calls |
+| **App 6: Data Analyst** | `http://localhost:8006` | Multi-turn conversational data reasoning |
 
-### Option 3: Run with Docker Compose
+#### Option B: Run a Single App (e.g., App 3)
+```bash
+uv run app 3
+```
+Or directly:
+```bash
+uv run python run.py 3
+```
+The selected app will start immediately on its assigned port (`http://localhost:8003` for App 3).
 
-```powershell
-docker compose up -d --build
+---
+
+## 🤖 Supported AI Providers
+
+All apps use a unified LLM layer in `shared/` that supports 5 providers:
+
+1. **Groq** (`llama-3.3-70b-versatile`) — Ultra-fast inference.
+2. **OpenAI** (`gpt-4o-mini`) — Standard OpenAI completions and tool-calling.
+3. **Google Gemini** (`gemini-flash-latest` / `gemini-flash-lite-latest`) — Dynamic alias automatically routing to Google's latest Flash or Flash-Lite model release.
+4. **Claude / Anthropic** (`claude-3-5-sonnet-20241022`) — Advanced reasoning via `langchain-anthropic`.
+5. **CodeVector** (`kimi-k-2-7-code`) — Integrated coding gateway from `.codevector.json`.
+
+### Comma-Separated Key Rotation & Failover
+You can paste or configure comma-separated keys in `.env` or in the UI prompt:
+```env
+GROQ_API_KEY=gsk_key1, gsk_key2, gsk_key3
+```
+- **Load Balancing:** Requests alternate between keys across turns.
+- **Auto-Failover:** If `key1` returns HTTP 429 (rate limit) or HTTP 503 (server overloaded), the client immediately re-invokes with `key2` without failing the user request.
+
+---
+
+## 📁 Repository Structure
+
+```text
+QA_Project/
+├── app3_faq_generator/       # App 3: PDF upload, RAG Q&A, FAQ generation, live chat
+│   ├── main.py               # FastAPI backend with search tool and backoff
+│   └── static/index.html     # Modern dark-mode UI with chips, citations, PDF export
+├── src/
+│   ├── portal/               # Unified dashboard serving port 8000
+│   │   ├── main.py           # Health checks and status polling
+│   │   └── static/index.html # Side-nav dashboard with iframe app runner
+│   └── qa_project/           # CLI package entrypoints
+│       ├── run.py            # Command for `uv run app <id>`
+│       └── run_all.py        # Command for `uv run all`
+├── shared/                   # Core shared libraries across apps
+│   ├── llm_client.py         # Multi-provider client, round-robin, .env auto-loader
+│   ├── llm_agent.py          # Battle-tested tool-calling agent loop
+│   ├── pdf_utils.py          # PDF parsing, semantic chunking & local vector indexing
+│   ├── errors.py             # Standardized HTTP error mapping & provider translation
+│   └── static/key_modal.js   # Dynamic provider picker & session key manager
+├── scripts/                  # Helper utilities (PDF generation, benchmarks)
+├── tests/                    # Comprehensive pytest test suite
+│   ├── test_apps.py          # Integration and regression tests
+│   ├── test_llm_client.py    # Multi-provider, round-robin & failover tests
+│   └── test_app3_comprehensive.py # Deep edge-case validation for App 3
+├── pyproject.toml            # Project metadata, dependencies & uv commands
+├── .codevector.json          # CodeVector gateway configuration
+├── .env.example              # Environment variables template
+└── README.md                 # Project documentation
 ```
 
-To stop the containers:
+---
 
-```powershell
-docker compose down
+## 🔎 About the Portal (`src/portal/`)
+
+### Is the Portal Required?
+- **For individual apps (e.g., `uv run app 3`):** No. Each app (1 to 6) is completely self-contained with its own UI, server, and API endpoints. App 3 runs directly on port 8003 without the portal.
+- **For running the full suite (`uv run all`):** The portal runs on port 8000 and provides a single, unified view with live status monitoring (`/api/status`) of all 6 services.
+- **Location:** The portal is cleanly organized inside `src/portal/`, keeping the repository root uncluttered.
+
+---
+
+## 🧪 Testing
+
+Run all unit and integration tests with `uv`:
+
+```bash
+uv run pytest
 ```
 
-## How a QA person should test it
+Run tests specifically for App 3 and the LLM layer:
 
-A QA person should think of each app as a workflow with three stages:
-
-1. Input validation
-   - Check whether the app rejects invalid files and missing required inputs.
-   - Verify that the UI gives clear feedback when input is missing or incorrect.
-
-2. Core processing
-   - Upload a valid document and observe whether the system processes it without crashing.
-   - Confirm that the result is generated in a reasonable amount of time.
-
-3. Output quality
-   - Confirm the output is structured correctly.
-   - Check whether the app references evidence, cites pages, or provides a sensible explanation.
-   - Validate that the response is not hallucinated when the input is weak or unrelated.
-
-## Expected behaviors by app
-
-- Resume Screener should produce a ranked result and include evidence-based reasoning.
-- Document Diff should compare the two files and return clear added/removed/modified sections.
-- FAQ Generator should return a list of FAQs grounded in the uploaded document.
-- Report Agent should create a structured report with sections and page references.
-- Policy Triage should classify the ticket based on the policy content provided.
-- Data Analyst should answer follow-up questions using the uploaded input.
-
-## API key handling
-
-Each app supports entering a Groq or OpenAI API key at runtime through the UI. The shared LLM client validates the key and uses the provider-specific model configuration.
-
-## Project structure
-
-- app1_resume_screener/ — resume screening app
-- app2_doc_diff/ — document comparison app
-- app3_faq_generator/ — FAQ generation and RAG app
-- app4_report_agent/ — report summarization app
-- app5_policy_triage/ — policy triage app
-- app6_data_analyst/ — data analysis app
-- portal/ — unified dashboard service
-- shared/ — common utilities for LLM access, PDF handling, errors, and agent logic
-- tests/ — pytest-based regression tests
-
-## Testing
-
-Run the test suite from the repository root:
-
-```powershell
-pytest
+```bash
+uv run pytest tests/test_llm_client.py tests/test_apps.py -k app3 tests/test_app3_comprehensive.py -v
 ```
 
-## Notes
+---
 
-- These apps are intended as QA/demo tools, not production-grade services.
-- The system is optimized for Python 3.11 and the Windows PowerShell workflow shown above.
-- If an app fails, check the input format first, then verify the API key and network connectivity.
+## 🎯 QA Evaluation Scenarios for App 3
+
+1. **Happy Path Generation:** Upload `test.pdf` or any multi-page PDF manual and click **⚡ Generate FAQs**. Verify 12 distinct Q&A pairs covering major sections with page citations.
+2. **Duplicate Avoidance:** Click **+ Generate More**. Verify that new questions do not duplicate any of the initial questions.
+3. **Targeted Regeneration:** Click **↺ Regenerate** on any card. Verify only that single card updates with a newly generated Q&A pair.
+4. **CRUD Deletion:** Click **✕ Delete** on individual cards. Verify the counter decrements correctly and the array remains intact.
+5. **In-Document Citations:** Ask in-document questions in the chat (e.g., *"What is the standard settlement timeline?"*). Verify exact factual accuracy and verified page tags.
+6. **Adversarial / Out-of-Scope:** Ask out-of-scope questions (e.g., *"Does SmartPay support Dogecoin?"*). Verify the agent answers that the information is not found in the document with empty citations `[]`.
