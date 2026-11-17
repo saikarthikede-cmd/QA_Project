@@ -2,12 +2,15 @@
 Upload a PDF with tables/numbers → ask data questions → agent extracts data,
 writes Python to compute, self-corrects on failure, returns result with page citation.
 """
+import asyncio
 import sys
+import uuid
 from pathlib import Path
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Cookie, FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -16,7 +19,14 @@ from pydantic import BaseModel
 from shared.errors import raise_for_groq_error, require_client
 from shared.llm_agent import run_tool_calling_agent
 from shared.llm_client import SetKeyRequest, resolve_model, validate_key
-from shared.pdf_utils import build_context, chunk_pages, embed_chunks, extract_pages, retrieve
+from shared.pdf_utils import (
+    build_context,
+    build_vector_index,
+    chunk_pages,
+    embed_chunks,
+    extract_pages,
+    retrieve_from_index,
+)
 from shared.safe_exec import run_sandboxed_python
 
 app = FastAPI(title="App 6 – PDF Data Analyst")
@@ -37,7 +47,30 @@ def set_key(body: SetKeyRequest):
     return {"status": "ok"}
 
 
-_state: dict = {"chunks": [], "filename": "", "history": []}
+# ---------------------------------------------------------------------------
+# BUG-01 FIX: Per-session state to prevent cross-contamination between users/tabs.
+# Each browser session gets its own PDF index, filename, and conversation history,
+# isolated by a UUID cookie. Previously a single global dict was shared across
+# every request, so uploading a new PDF from any tab would wipe everyone's history.
+# ---------------------------------------------------------------------------
+
+SESSION_COOKIE = "app6_session"
+_SESSION_MAX = 100  # evict oldest session when cap is reached
+
+# Map of session_id → {"index": VectorIndex|None, "filename": str, "history": list}
+_sessions: dict = {}
+
+
+def _get_state(session_id: str) -> dict:
+    """Return or create the session-local state dict for this session ID."""
+    if session_id not in _sessions:
+        # Evict the oldest session when we hit the cap to bound memory growth.
+        if len(_sessions) >= _SESSION_MAX:
+            oldest = next(iter(_sessions))
+            _sessions.pop(oldest, None)
+        _sessions[session_id] = {"index": None, "filename": "", "history": []}
+    return _sessions[session_id]
+
 
 MAX_RETRIES = 3
 
@@ -87,32 +120,51 @@ TOOLS = [
 ]
 
 
-def run_tool(name: str, args: dict) -> str:
-    if name == "retrieve_data":
-        results = retrieve(args["query"], _state["chunks"], top_k=5)
-        # No is_grounded() veto here: this is a tool call inside an agentic
-        # loop, not the final answer — the query is the model's own
-        # exploratory sub-query and can legitimately score low on cosine
-        # similarity while still returning the chunk it actually needs. The
-        # system prompt already tells the model to say "I can't find this"
-        # when the retrieved chunks don't contain what was asked; vetoing
-        # here would hide real data from that judgment call instead of
-        # deferring to it.
-        if not results:
-            return "No relevant data found for this query."
-        return build_context(results)
+def _make_run_tool(state: dict):
+    """Return a run_tool closure bound to the given per-session state.
 
-    if name == "run_python":
-        return run_sandboxed_python(args["code"])
+    Previously run_tool was a module-level function reading from a single
+    global _state dict, so concurrent sessions would see each other's data.
+    Binding to the session-local state dict fixes that.
+    """
 
-    if name == "recall_previous_answer":
-        topic = args.get("topic", "").lower()
-        matches = [h for h in _state["history"] if topic in h["question"].lower()]
-        if not matches:
-            return "No matching previous answer found in this conversation."
-        return "\n".join(f"Q: {m['question']}\nA: {m['answer'][:300]}" for m in matches[-2:])
+    def run_tool(name: str, args: dict) -> str:
+        if name == "retrieve_data":
+            index = state.get("index")
+            if index is None:
+                return "No PDF indexed yet."
 
-    return "Unknown tool."
+            # BUG-02 FIX: Use the pre-built VectorIndex (retrieve_from_index) instead
+            # of retrieve(), which rebuilt the vector store from scratch on every call.
+            # The index is now created once at upload time and reused across queries,
+            # which avoids the per-query O(n) store construction overhead.
+            results = retrieve_from_index(args["query"], index, top_k=5)
+
+            # BUG-09 FIX: Drop chunks whose cosine similarity is too low before
+            # passing them to the agent. Without this filter, near-zero-score chunks
+            # were silently included, letting the LLM hallucinate answers from
+            # loosely-related text. 0.10 is a conservative floor — low enough to
+            # keep genuinely relevant chunks while blocking true noise.
+            MIN_RETRIEVAL_SCORE = 0.10
+            results = [r for r in results if r.score >= MIN_RETRIEVAL_SCORE]
+
+            if not results:
+                return "No relevant data found for this query."
+            return build_context(results)
+
+        if name == "run_python":
+            return run_sandboxed_python(args["code"])
+
+        if name == "recall_previous_answer":
+            topic = args.get("topic", "").lower()
+            matches = [h for h in state["history"] if topic in h["question"].lower()]
+            if not matches:
+                return "No matching previous answer found in this conversation."
+            return "\n".join(f"Q: {m['question']}\nA: {m['answer'][:300]}" for m in matches[-2:])
+
+        return "Unknown tool."
+
+    return run_tool
 
 
 class AnalysisRequest(BaseModel):
@@ -128,7 +180,16 @@ MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 
 
 @app.post("/upload")
-async def upload(file: UploadFile = File(...)):
+async def upload(
+    response: Response,
+    file: UploadFile = File(...),
+    session_id: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE),
+):
+    # BUG-01 FIX: Issue a new session cookie if the client doesn't have one yet.
+    if not session_id:
+        session_id = str(uuid.uuid4())
+        response.set_cookie(SESSION_COOKIE, session_id, httponly=True, samesite="lax")
+
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "Only PDF files are accepted.")
     pdf_bytes = await file.read()
@@ -139,36 +200,62 @@ async def upload(file: UploadFile = File(...)):
         pages = extract_pages(pdf_bytes)
     except ValueError as e:
         raise HTTPException(422, str(e))
+
     chunks = chunk_pages(pages, source=file.filename)
     chunks = embed_chunks(chunks)
-    _state["chunks"] = chunks
-    _state["filename"] = file.filename
-    _state["history"] = []
+
+    # BUG-02 FIX: Build the VectorIndex once at upload time and store it in the
+    # session so every retrieve_data call reuses the same in-memory index instead
+    # of rebuilding it from scratch on each query.
+    index = build_vector_index(chunks)
+
+    state = _get_state(session_id)
+    state["index"] = index
+    state["filename"] = file.filename
+    state["history"] = []
+
     return {"status": "ok", "filename": file.filename, "chunks": len(chunks)}
 
 
 @app.post("/reset-chat")
-def reset_chat():
-    _state["history"] = []
+def reset_chat(session_id: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE)):
+    # BUG-01 FIX: Clear only this session's history, not a shared global.
+    if session_id and session_id in _sessions:
+        _sessions[session_id]["history"] = []
     return {"status": "cleared"}
 
 
+# BUG-04 FIX: Make /analyze async and delegate the blocking LLM loop to a
+# thread via asyncio.to_thread(). The original sync handler stalled FastAPI's
+# event loop for the full duration of multi-turn LLM calls under any concurrency.
 @app.post("/analyze")
-def analyze(body: AnalysisRequest):
-    if not _state["chunks"]:
+async def analyze(
+    body: AnalysisRequest,
+    response: Response,
+    session_id: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE),
+):
+    # Edge case: browser hit /analyze before the /upload response set the cookie.
+    if not session_id:
+        session_id = str(uuid.uuid4())
+        response.set_cookie(SESSION_COOKIE, session_id, httponly=True, samesite="lax")
+
+    state = _get_state(session_id)
+    if state.get("index") is None:
         raise HTTPException(400, "No PDF uploaded yet.")
     if not body.question.strip():
         raise HTTPException(400, "Question cannot be empty.")
     require_client(client)
     try:
-        return _run_analysis(body)
+        # Run the synchronous agent loop in a thread pool so the event loop
+        # remains free to handle other requests during the LLM round-trips.
+        return await asyncio.to_thread(_run_analysis, body, state)
     except Exception as e:
         raise_for_groq_error(e)
 
 
-def _run_analysis(body: AnalysisRequest):
+def _run_analysis(body: AnalysisRequest, state: dict):
     system = (
-        f"You are a strict data analyst agent with access to '{_state['filename']}'. "
+        f"You are a strict data analyst agent with access to '{state['filename']}'. "
         "This is a multi-turn conversation — you have memory of earlier questions via recall_previous_answer.\n"
         "Workflow:\n"
         "1. Use retrieve_data to find the EXACT numbers or data needed to answer the question.\n"
@@ -184,12 +271,14 @@ def _run_analysis(body: AnalysisRequest):
         "STRICT RULE: If the question asks for data granularity that does not exist in the PDF "
         "(e.g. monthly when only quarterly exists, per-product when only category totals exist), "
         "say exactly: 'I can't find this in the uploaded document.' and stop.\n"
-        "IMPORTANT: Call AT MOST 2 tools per turn. Do not repeat the same call."
+        # BUG-10 FIX: System prompt now says 3 to match max_tool_calls_per_turn=3 in code.
+        # Previously the prompt said 2 while the code enforced 3 — a silent mismatch.
+        "IMPORTANT: Call AT MOST 3 tools per turn. Do not repeat the same call."
     )
 
     history_context = ""
-    if _state["history"]:
-        recent = _state["history"][-3:]
+    if state["history"]:
+        recent = state["history"][-3:]
         history_context = "\n\nRecent conversation:\n" + "\n".join(
             f"Q: {h['question']}\nA: {h['answer'][:200]}" for h in recent
         )
@@ -202,9 +291,13 @@ def _run_analysis(body: AnalysisRequest):
     def is_python_error(name: str, result: str) -> bool:
         return name == "run_python" and result.startswith("ERROR")
 
+    # BUG-01 FIX: Pass a session-bound run_tool closure instead of the former
+    # module-level function that read from the shared global _state dict.
+    run_tool = _make_run_tool(state)
+
     result = run_tool_calling_agent(
         client,
-        model=resolve_model(provider, "llama-3.1-8b-instant"),
+        model=resolve_model(provider, "openai/gpt-oss-20b"),
         initial_messages=initial_messages,
         tools=TOOLS,
         run_tool=run_tool,
@@ -217,20 +310,29 @@ def _run_analysis(body: AnalysisRequest):
         escalation_message="Python execution failed too many times. Provide the best answer you can from the retrieved data without running code.",
     )
 
-    # Recompute a numbered "retry" count per error step for the frontend's
-    # retry badge — the shared executor tracks an error streak internally
-    # but doesn't expose a per-step number (only this app's UI needs it).
-    python_retries = 0
+    # BUG-05 FIX: Track a cumulative error count across all steps so the retry
+    # badge on the frontend shows the globally correct attempt number.
+    # The original code reset the counter to 0 on every non-error step, so a
+    # sequence like [error, error, success, error] would display [1, 2, 0, 1]
+    # instead of the correct [1, 2, —, 3].
+    total_errors = 0
     for step in result.agent_steps:
-        python_retries = python_retries + 1 if step["error"] else 0
-        step["retry"] = python_retries
+        if step["error"]:
+            total_errors += 1
+            step["retry"] = total_errors
+        else:
+            step["retry"] = 0  # 0 = no badge shown for successful steps
 
     if result.converged:
         answer = result.content or "No answer produced."
-        _state["history"].append({"question": body.question, "answer": answer})
-        _state["history"] = _state["history"][-10:]
+        state["history"].append({"question": body.question, "answer": answer})
+        state["history"] = state["history"][-10:]
         return {"answer": answer, "agent_steps": result.agent_steps}
 
     final_answer = "Agent did not converge in time. Try a simpler/more specific question."
-    _state["history"].append({"question": body.question, "answer": final_answer})
+    state["history"].append({"question": body.question, "answer": final_answer})
+    # BUG-13 FIX: Apply the -10 history cap on the non-converged path too.
+    # Previously the cap (state["history"][-10:]) was only applied on the
+    # converged path, so non-converged turns could grow the history unboundedly.
+    state["history"] = state["history"][-10:]
     return {"answer": final_answer, "agent_steps": result.agent_steps}
