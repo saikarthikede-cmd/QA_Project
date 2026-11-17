@@ -2,8 +2,11 @@
 Upload a policy PDF + paste a support ticket → agent retrieves relevant policy
 via tool calls → decides escalate vs auto-resolve → drafts a grounded reply.
 """
+import pickle
+import re
 import sys
 from pathlib import Path
+from typing import List, Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -16,15 +19,27 @@ from pydantic import BaseModel
 from shared.errors import raise_for_groq_error, require_client
 from shared.json_repair import extract_json_object
 from shared.llm_agent import run_tool_calling_agent
-from shared.llm_client import SetKeyRequest, resolve_model, validate_key
+from shared.llm_client import SetKeyRequest, init_from_env, resolve_model, validate_key
 from shared.pdf_utils import build_context, chunk_pages, embed_chunks, extract_pages, is_grounded, retrieve
 
 app = FastAPI(title="App 5 – Policy Triage Agent")
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 app.mount("/shared-static", StaticFiles(directory=Path(__file__).parent.parent / "shared" / "static"), name="shared_static")
 
-client = None
-provider = None
+client, provider = init_from_env()
+
+
+@app.get("/api/key-status")
+def key_status():
+    global client, provider
+    if client is None:
+        c, p = init_from_env()
+        if c is not None:
+            client, provider = c, p
+    return {
+        "configured": client is not None,
+        "provider": provider if client is not None else None,
+    }
 
 
 @app.post("/api/set-key")
@@ -38,6 +53,59 @@ def set_key(body: SetKeyRequest):
 
 
 _state: dict = {"chunks": [], "filename": "", "last_result": None, "chat_history": []}
+
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
+CACHE_DIR = Path(__file__).parent / ".rag_cache"
+CACHE_FILE = CACHE_DIR / "last_policy_upload.pkl"
+
+
+def _save_policy_cache() -> None:
+    try:
+        CACHE_DIR.mkdir(exist_ok=True)
+        with CACHE_FILE.open("wb") as f:
+            pickle.dump(
+                {
+                    "filename": _state.get("filename", ""),
+                    "chunks": _state.get("chunks", []),
+                    "last_result": _state.get("last_result"),
+                    "chat_history": _state.get("chat_history", []),
+                },
+                f,
+            )
+    except Exception:
+        pass
+
+
+def _ensure_policy_loaded() -> bool:
+    if _state.get("chunks"):
+        return True
+    if not CACHE_FILE.exists():
+        return False
+    try:
+        with CACHE_FILE.open("rb") as f:
+            cached = pickle.load(f)
+        chunks = cached.get("chunks") or []
+        if not chunks:
+            return False
+        _state["chunks"] = chunks
+        _state["filename"] = cached.get("filename", "")
+        _state["last_result"] = cached.get("last_result")
+        _state["chat_history"] = cached.get("chat_history", [])
+        return True
+    except Exception:
+        return False
+
+
+@app.get("/session")
+def get_session():
+    _ensure_policy_loaded()
+    return {
+        "filename": _state.get("filename", ""),
+        "chunks": len(_state.get("chunks", [])),
+        "last_result": _state.get("last_result"),
+        "chat_history": _state.get("chat_history", []),
+    }
+
 
 # Multi-tool agent: retrieval + three rule-based / heuristic tools the agent picks among.
 TOOLS = [
@@ -119,28 +187,52 @@ SLA_TABLE = {
     "general": "72 hours — standard support SLA for general inquiries.",
 }
 
+SLA_SYNONYMS = {
+    "refund": "billing",
+    "payment": "billing",
+    "invoice": "billing",
+    "subscription": "billing",
+    "chargeback": "billing",
+    "fraud": "security",
+    "breach": "security",
+    "hacked": "security",
+    "hack": "security",
+    "stolen": "security",
+    "compromised": "security",
+    "lawyer": "legal",
+    "lawsuit": "legal",
+    "litigation": "legal",
+    "attorney": "legal",
+    "court": "legal",
+    "bug": "technical",
+    "crash": "technical",
+    "outage": "technical",
+    "downtime": "technical",
+}
+
 _NEGATIVE_WORDS = [
     "angry", "furious", "unacceptable", "terrible", "worst", "lawsuit", "sue",
     "scam", "fraud", "disgusted", "frustrated", "ridiculous", "outraged", "horrible",
+    "court", "lawyer", "attorney", "litigation", "police", "stolen", "breach", "threat", "hacked",
 ]
 
 
 def run_tool(name: str, args: dict) -> str:
     if name == "retrieve_policy":
-        # Truncate query to prevent the model from generating pathologically long strings
         query = args.get("query", "")[:300]
         results = retrieve(query, _state["chunks"], top_k=3)
-        # No is_grounded() veto here — same reasoning as app6's retrieve_data:
-        # this is an exploratory sub-query inside the agent's own reasoning
-        # loop, not the final answer. The triage system prompt already
-        # judges whether retrieved policy text actually supports a decision.
         if not results:
             return "No relevant policy found for this query."
-        return build_context(results)[:900]
+        return build_context(results)[:3000]
 
     if name == "check_sla_status":
-        issue = args.get("issue_type", "general")[:50].strip().lower()
-        return SLA_TABLE.get(issue, SLA_TABLE["general"])
+        raw_issue = args.get("issue_type", "general")[:50].strip().lower()
+        if raw_issue in SLA_TABLE:
+            return SLA_TABLE[raw_issue]
+        for key, category in SLA_SYNONYMS.items():
+            if key in raw_issue:
+                return SLA_TABLE[category]
+        return SLA_TABLE["general"]
 
     if name == "classify_sentiment":
         text = args.get("text", "")[:500].lower()
@@ -158,6 +250,55 @@ def run_tool(name: str, args: dict) -> str:
     return "Unknown tool."
 
 
+def _extract_pages_from_text(raw_pages, text_context: str = "", max_page: int = 100) -> List[int]:
+    """Extract page citations from structured lists, strings, or prose text."""
+    pages = set()
+    upper = max_page if max_page > 0 else 9999
+
+    if isinstance(raw_pages, (list, tuple)):
+        for item in raw_pages:
+            s = str(item).strip()
+            range_match = re.match(r"^(\d+)\s*(?:-|to)\s*(\d+)$", s, re.IGNORECASE)
+            if range_match:
+                start, end = int(range_match.group(1)), int(range_match.group(2))
+                for p in range(start, end + 1):
+                    if 1 <= p <= upper:
+                        pages.add(p)
+            elif s.isdigit():
+                val = int(s)
+                if 1 <= val <= upper:
+                    pages.add(val)
+    elif isinstance(raw_pages, str) and raw_pages.strip():
+        for m in re.finditer(r"(\d+)\s*(?:-|to)\s*(\d+)", raw_pages, re.IGNORECASE):
+            start, end = int(m.group(1)), int(m.group(2))
+            for p in range(start, end + 1):
+                if 1 <= p <= upper:
+                    pages.add(p)
+        for num in re.split(r"[,and\s]+", raw_pages):
+            if num.isdigit():
+                val = int(num)
+                if 1 <= val <= upper:
+                    pages.add(val)
+
+    if not pages and text_context:
+        for m in re.finditer(r"(?:pages?|p\.)\s*([0-9]+(?:\s*(?:,|and|to|-)\s*[0-9]+)*)", text_context, re.IGNORECASE):
+            raw = m.group(1)
+            range_match = re.match(r"^(\d+)\s*(?:-|to)\s*(\d+)$", raw.strip(), re.IGNORECASE)
+            if range_match:
+                start, end = int(range_match.group(1)), int(range_match.group(2))
+                for p in range(start, end + 1):
+                    if 1 <= p <= upper:
+                        pages.add(p)
+                continue
+            for num in re.split(r"[,and\s]+", raw):
+                if num.isdigit():
+                    val = int(num)
+                    if 1 <= val <= upper:
+                        pages.add(val)
+
+    return sorted(pages)
+
+
 class TriageRequest(BaseModel):
     ticket: str
 
@@ -169,9 +310,6 @@ class AskRequest(BaseModel):
 @app.get("/")
 def index():
     return FileResponse(Path(__file__).parent / "static" / "index.html")
-
-
-MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 
 
 @app.post("/upload")
@@ -192,6 +330,7 @@ async def upload(file: UploadFile = File(...)):
     _state["filename"] = file.filename
     _state["last_result"] = None
     _state["chat_history"] = []
+    _save_policy_cache()
     return {"status": "ok", "filename": file.filename, "chunks": len(chunks)}
 
 
@@ -206,6 +345,7 @@ def triage(body: TriageRequest):
         result = _run_triage(body)
         _state["last_result"] = result
         _state["chat_history"] = []
+        _save_policy_cache()
         return result
     except Exception as e:
         raise_for_groq_error(e)
@@ -235,13 +375,35 @@ def _run_triage(body: TriageRequest):
     ]
 
     model = resolve_model(provider, "llama-3.1-8b-instant")
-    result = run_tool_calling_agent(
-        client, model=model, initial_messages=initial_messages, tools=TOOLS, run_tool=run_tool,
-        max_iterations=10, max_tool_calls_per_turn=3, max_total_tool_calls=12,
-    )
+    try:
+        result = run_tool_calling_agent(
+            client, model=model, initial_messages=initial_messages, tools=TOOLS, run_tool=run_tool,
+            max_iterations=10, max_tool_calls_per_turn=3, max_total_tool_calls=12,
+        )
+    except Exception:
+        fallback_models = []
+        if provider == "gemini":
+            fallback_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+        elif provider == "groq":
+            fallback_models = ["llama-3.3-70b-versatile"]
 
-    # app5's UI expects {"tool", "query", "result_preview"} per step, not the
-    # executor's generic {"tool", "input", "output", "error"}.
+        result = None
+        for fb_model in fallback_models:
+            if fb_model == model:
+                continue
+            try:
+                result = run_tool_calling_agent(
+                    client, model=fb_model, initial_messages=initial_messages, tools=TOOLS, run_tool=run_tool,
+                    max_iterations=10, max_tool_calls_per_turn=3, max_total_tool_calls=12,
+                )
+                if result and result.converged:
+                    break
+            except Exception:
+                continue
+        if result is None:
+            raise
+
+    # app5's UI expects {"tool", "query", "result_preview"} per step
     agent_steps = [
         {
             "tool": s["tool"],
@@ -257,27 +419,28 @@ def _run_triage(body: TriageRequest):
     parsed = extract_json_object(result.content or "")
 
     if not parsed or "decision" not in parsed:
-        # Re-prompt for structured JSON, with the full tool-call trace still
-        # in context — a single direct call, no tools, no loop.
+        # Re-prompt for structured JSON without vendor-specific response_format constraint
         reprompt = result.messages + [HumanMessage(
-            content="Now return your final answer as a JSON object with keys: decision, reason, draft_reply, policy_pages. No markdown, raw JSON only."
+            content="Now return your final answer as a raw JSON object with keys: decision (ESCALATE or AUTO-RESOLVE), reason, draft_reply, policy_pages. No markdown fences, output raw JSON only."
         )]
-        r2 = client.bind(model=model, temperature=0, response_format={"type": "json_object"}).invoke(reprompt)
-        parsed = extract_json_object(r2.content or "")
+        try:
+            r2 = client.bind(model=model, temperature=0).invoke(reprompt)
+            parsed = extract_json_object(r2.content or "")
+        except Exception:
+            parsed = None
 
     if not parsed or "decision" not in parsed:
-        parsed = {"decision": "ESCALATE",
-                  "reason": "The AI response could not be parsed — escalating to a human by default.",
-                  "draft_reply": "", "policy_pages": []}
+        parsed = {
+            "decision": "ESCALATE",
+            "reason": "The AI response could not be parsed — escalating to a human by default.",
+            "draft_reply": "",
+            "policy_pages": [],
+        }
 
+    page_count = max((c.page for c in _state["chunks"]), default=100)
     raw_pages = parsed.get("policy_pages", [])
-    if isinstance(raw_pages, list):
-        pages = [int(p) for p in raw_pages if str(p).strip().isdigit()]
-    elif isinstance(raw_pages, str):
-        pages = [int(x) for x in raw_pages.replace(",", " ").split() if x.strip().isdigit()]
-    else:
-        pages = []
-    parsed["policy_pages"] = sorted(set(pages))
+    context_text = f"{parsed.get('reason', '')} {parsed.get('draft_reply', '')}"
+    parsed["policy_pages"] = _extract_pages_from_text(raw_pages, text_context=context_text, max_page=page_count)
     parsed["agent_steps"] = agent_steps
     return parsed
 
@@ -293,7 +456,7 @@ def ask(body: AskRequest):
     if not is_grounded(results) and not _state["last_result"]:
         return {"answer": "No relevant content found in the policy document.", "pages": []}
     require_client(client)
-    context = build_context(results)[:1000] if results else "No relevant content found."
+    context = build_context(results)[:3000] if results else "No relevant content found."
 
     triage_summary = ""
     if _state["last_result"]:
@@ -318,16 +481,37 @@ def ask(body: AskRequest):
     )
 
     try:
-        response = client.bind(model=resolve_model(provider, "llama-3.1-8b-instant"), temperature=0).invoke(
+        model = resolve_model(provider, "llama-3.1-8b-instant")
+        response = client.bind(model=model, temperature=0).invoke(
             [HumanMessage(content=prompt)]
         )
     except Exception as e:
         raise_for_groq_error(e)
 
     answer = response.content.strip()
-    pages = sorted({r.chunk.page for r in results})
+    page_count = max((c.page for c in _state["chunks"]), default=100)
+
+    # Check if answer indicates out-of-scope or not found
+    is_not_found = any(phrase in answer.lower() for phrase in [
+        "not found in the policy", "not found in policy", "no relevant content found",
+        "not mentioned in the policy", "not mentioned in policy", "not covered in the policy",
+        "not covered by the policy", "does not mention", "does not contain", "not covered",
+        "no information",
+    ])
+
+    if is_not_found:
+        pages = []
+    else:
+        cited_pages = _extract_pages_from_text([], text_context=answer, max_page=page_count)
+        if cited_pages:
+            pages = cited_pages
+        elif results and is_grounded(results):
+            pages = sorted({r.chunk.page for r in results})
+        else:
+            pages = []
 
     _state["chat_history"].append({"question": body.question, "answer": answer})
     _state["chat_history"] = _state["chat_history"][-10:]
+    _save_policy_cache()
 
     return {"answer": answer, "pages": pages}
